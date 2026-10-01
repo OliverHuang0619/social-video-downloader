@@ -1,25 +1,18 @@
 {
   "name": "social-video-downloader",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
-  "description": "本地运行的跨平台社交视频下载器",
-  "main": "out/main/index.js",
+  "description": "可通过 Docker 部署的 Web 社交视频下载器",
   "type": "module",
   "scripts": {
-    "dev": "electron-vite dev",
-    "build": "electron-vite build",
-    "preview": "electron-vite preview",
+    "dev": "npm run build && npm start",
+    "build": "vite build --config vite.config.ts && vite build --config vite.server.config.ts",
+    "start": "node dist/server/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit",
-    "dist": "npm run build && electron-builder",
-    "dist:mac": "npm run build && electron-builder --mac",
-    "dist:win": "npm run build && electron-builder --win",
-    "dist:linux": "npm run build && electron-builder --linux"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@electron-toolkit/utils": "^4.0.0",
-    "ffmpeg-static": "^5.3.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
@@ -28,62 +21,8 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.0.0",
-    "electron": "^44.5.1",
-    "electron-builder": "^26.0.12",
-    "electron-vite": "^5.0.0",
     "typescript": "^5.9.0",
     "vite": "^7.2.0",
     "vitest": "^4.0.0"
-  },
-  "build": {
-    "appId": "com.local.socialvideodownloader",
-    "productName": "Social Video Downloader",
-    "asar": true,
-    "asarUnpack": [
-      "node_modules/ffmpeg-static/**"
-    ],
-    "files": [
-      "out/**/*",
-      "package.json"
-    ],
-    "mac": {
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "arm64",
-            "x64"
-          ]
-        }
-      ],
-      "minimumSystemVersion": "22.0.0",
-      "identity": "-",
-      "hardenedRuntime": true
-    },
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ]
-    },
-    "linux": {
-      "target": [
-        {
-          "target": "AppImage",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "category": "Utility"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true
-    }
   }
 }

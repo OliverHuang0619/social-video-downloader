@@ -1,7 +1,7 @@
 export type Platform = 'youtube' | 'instagram' | 'other'
 export type MediaKind = 'video' | 'audio'
 export type JobStatus = 'queued' | 'downloading' | 'completed' | 'skipped' | 'failed' | 'cancelled'
-export type CookieSource = 'none' | 'chrome' | 'edge' | 'brave' | 'firefox' | 'safari'
+export type CookieSource = 'none' | 'file'
 
 export interface MediaItem {
   id: string
@@ -62,12 +62,10 @@ export interface StartRequest { items: MediaItem[]; options: DownloadOptions }
 
 export interface DownloaderApi {
   tools: { status(): Promise<ToolStatus>; update(): Promise<ToolStatus>; onProgress(cb: (event: ToolUpdateEvent) => void): () => void }
-  thumbnails: { load(url: string): Promise<string | undefined> }
   source: { analyze(request: AnalyzeRequest): Promise<MediaItem[]> }
   creator: { scan(request: ScanRequest): Promise<{ scanId: string }>; stop(): Promise<void>; onProgress(cb: (event: ScanEvent) => void): () => void }
-  destination: { pick(): Promise<string | null>; open(path: string): Promise<boolean>; current(): Promise<string> }
+  destination: { current(): Promise<string> }
   downloads: { start(request: StartRequest): Promise<DownloadJob[]>; cancel(id?: string): Promise<void>; retry(id: string): Promise<void>; onProgress(cb: (jobs: DownloadJob[]) => void): () => void }
-  app: { platform(): Promise<NodeJS.Platform> }
 }
 
 export type ScanEvent =

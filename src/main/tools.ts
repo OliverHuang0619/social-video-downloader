@@ -1,10 +1,9 @@
-import { app } from 'electron'
 import { access, chmod, mkdir, rename, rm, writeFile } from 'node:fs/promises'
 import { constants, createWriteStream } from 'node:fs'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
+import os from 'node:os'
 import https from 'node:https'
-import ffmpegStatic from 'ffmpeg-static'
 import type { ToolInfo, ToolName, ToolStatus, ToolUpdateEvent } from '../shared/types'
 
 type ProgressReporter = (event: ToolUpdateEvent) => void
@@ -29,17 +28,13 @@ async function version(command: string, args = ['--version']) {
 }
 
 export class ToolManager {
-  readonly dir = path.join(app.getPath('userData'), 'tools')
+  readonly dir = path.join(process.env.SVD_CONFIG_DIR || path.join(os.homedir(), '.config', 'social-video-downloader'), 'tools')
   private managed(name: 'yt-dlp' | 'gallery-dl' | 'ffmpeg') {
     return path.join(this.dir, process.platform === 'win32' ? `${name}.exe` : name)
   }
   async resolve(name: 'yt-dlp' | 'gallery-dl' | 'ffmpeg'): Promise<string | undefined> {
     const local = this.managed(name)
     if (await executable(local)) return local
-    if (name === 'ffmpeg' && ffmpegStatic) {
-      const bundled = app.isPackaged ? ffmpegStatic.replace('app.asar', 'app.asar.unpacked') : ffmpegStatic
-      if (await executable(bundled)) return bundled
-    }
     return which(name)
   }
   async status(): Promise<ToolStatus> {

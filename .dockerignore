@@ -1,0 +1,16 @@
+.git
+.github
+.DS_Store
+node_modules
+dist
+dist-*
+out
+coverage
+test-results
+playwright-report
+*.log
+*.dmg
+*.AppImage
+test-fixture
+downloads
+config

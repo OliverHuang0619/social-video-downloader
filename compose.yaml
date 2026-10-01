@@ -1,0 +1,10 @@
+services:
+  video-downloader:
+    build: .
+    image: social-video-downloader:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./downloads:/downloads
+      - ./config:/config

@@ -16,15 +16,14 @@ describe('核心工具', () => {
 describe('下载队列', () => {
   it('解析 yt-dlp 的机器可读进度和准备阶段', () => {
     expect(parseDownloadOutput('svd: 11.6%|36.04KiB/s|00:29')).toEqual({ progress: 11.6, speed: '36.04KiB/s', eta: '00:29', detail: '正在下载媒体文件…' })
-    expect(parseDownloadOutput('Extracting cookies from chrome')).toEqual({ detail: '正在从浏览器安全读取登录 Cookie…' })
+    expect(parseDownloadOutput('Extracting cookies from chrome')).toEqual({ detail: '正在读取服务器 Cookie 文件…' })
     expect(parseDownloadOutput('[Merger] Merging formats into "video.mp4"')).toEqual({ detail: '正在合并并处理媒体文件…' })
   })
   it('工具解析尚未完成时也只预留三个并发任务', async () => {
     const never = new Promise<string | undefined>(() => undefined)
     const queue = new DownloadQueue({ resolve: () => never } as never)
     const item = (id: string): MediaItem => ({ id, sourceUrl: `https://example.com/${id}`, platform: 'other', title: id, uploader: '', duration: 0, thumbnail: '', publishedAt: '', selected: true, kind: 'video' })
-    const sender = { isDestroyed: () => false, send: () => undefined }
-    const jobs = await queue.start({ items: ['1', '2', '3', '4', '5'].map(item), options }, sender as never)
+    const jobs = await queue.start({ items: ['1', '2', '3', '4', '5'].map(item), options }, () => undefined)
     expect(jobs.filter(job => job.status === 'downloading')).toHaveLength(3)
     expect(jobs.filter(job => job.status === 'queued')).toHaveLength(2)
   })

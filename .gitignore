@@ -17,6 +17,8 @@ test-results/
 .env
 .env.*
 !.env.example
+/config/
+/downloads/
 *.local
 
 # Logs and temporary files

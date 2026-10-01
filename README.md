@@ -1,23 +1,67 @@
 # Social Video Downloader
 
-本地运行的 Electron 社交视频下载器，支持多链接解析、YouTube 频道/播放列表、Instagram 博主帖子与 Reels 扫描、批量选择和三并发下载。
+前后端分离的 Web 社交视频下载器。React 前端通过 REST API 与 Node.js 后端通信，扫描和下载进度通过 SSE 实时推送；生产环境中前后端由同一个容器提供服务。
 
-## 开发
+支持多链接解析、YouTube 频道/播放列表、Instagram 帖子与 Reels 扫描、批量选择和三并发下载。
+
+## Docker 部署
+
+Dockerfile 基于 Debian/Node 官方多架构镜像，可构建 `linux/amd64`（x86_64）和 `linux/arm64` 镜像。当前主机直接部署：
+
+```bash
+docker compose up -d --build
+```
+
+默认只监听服务器的 `127.0.0.1:3000`。可用 SSH 隧道访问：
+
+```bash
+ssh -L 3000:127.0.0.1:3000 user@server
+```
+
+然后打开 <http://127.0.0.1:3000>。如需公网访问，请在前面配置带身份验证和 HTTPS 的反向代理；本应用自身不提供用户认证，不应直接暴露到公网。
+
+数据目录：
+
+- `./downloads`：下载结果，对应容器内 `/downloads`
+- `./config`：配置和可选 Cookie，对应容器内 `/config`
+
+需要登录态时，将 Netscape 格式的 `cookies.txt` 放到 `./config/cookies.txt`，并在页面选择“服务器 cookies.txt”。请将该文件权限限制为仅部署用户可读，且不要提交到 Git。
+
+## 多架构镜像交付
+
+使用 Docker Buildx 构建并推送同一标签下的 amd64/arm64 manifest：
+
+```bash
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -t registry.example.com/team/social-video-downloader:0.2.0 \
+  --push .
+```
+
+本地单架构验证：
+
+```bash
+docker build -t social-video-downloader:local .
+docker run --rm -p 127.0.0.1:3000:3000 \
+  -v "$PWD/downloads:/downloads" \
+  -v "$PWD/config:/config" \
+  social-video-downloader:local
+```
+
+## 本地开发与验证
 
 ```bash
 npm install
-npm run dev
-```
-
-应用优先使用系统中的 `yt-dlp`、`gallery-dl` 与 `ffmpeg`；也可以在界面中点击“安装 / 更新工具”。
-
-## 验证与打包
-
-```bash
 npm test
 npm run typecheck
 npm run build
-npm run dist
+npm start
 ```
 
-下载功能仅供保存你有权获取的内容。Cookie 由下载工具直接从本机浏览器读取，应用不会存储或上传 Cookie。
+开发模式当前会先构建前后端，再启动服务：
+
+```bash
+npm run dev
+```
+
+下载功能仅供保存你有权获取的内容。

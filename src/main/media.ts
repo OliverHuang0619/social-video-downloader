@@ -1,13 +1,13 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import http from 'node:http'
-import https from 'node:https'
-import type { WebContents } from 'electron'
 import { detectPlatform, mediaFromYtDlp, normalizeUrls } from '../shared/core'
 import type { AnalyzeRequest, CookieSource, MediaItem, ScanEvent, ScanRequest } from '../shared/types'
 import type { ToolManager } from './tools'
 
-function cookieArgs(source: CookieSource) { return source === 'none' ? [] : ['--cookies-from-browser', source] }
+function cookieArgs(source: CookieSource) {
+  if (source === 'none') return []
+  return ['--cookies', process.env.SVD_COOKIES_FILE || '/config/cookies.txt']
+}
 function collect(command: string, args: string[]) {
   return new Promise<string>((resolve, reject) => {
     const child = spawn(command, args, { windowsHide: true }); let out = '', error = '', settled = false
@@ -27,51 +27,15 @@ function collect(command: string, args: string[]) {
 }
 function classifyError(error: string) {
   const value = error.trim()
-  if (/cookies|login|sign in|authentication/i.test(value)) return '需要有效的浏览器登录 Cookie，请在设置中选择已登录该平台的浏览器。'
-  if (/429|rate.?limit|too many/i.test(value)) return '平台请求过于频繁，请稍后重试或选择浏览器 Cookie。'
+  if (/cookies|login|sign in|authentication/i.test(value)) return '需要有效的登录 Cookie，请挂载 cookies.txt 并在设置中启用。'
+  if (/429|rate.?limit|too many/i.test(value)) return '平台请求过于频繁，请稍后重试或启用服务器 Cookie。'
   if (/private|not available|unavailable/i.test(value)) return '该内容不可用、为私密内容或受到地区限制。'
   return value.split(/\r?\n/).filter(Boolean).slice(-3).join('\n') || '解析失败'
 }
 
 export class MediaService {
   private scanProcess?: ChildProcessWithoutNullStreams
-  private thumbnailCache = new Map<string, Promise<string | undefined>>()
   constructor(private tools: ToolManager) {}
-  async loadThumbnail(value: string): Promise<string | undefined> {
-    let url: URL
-    try { url = new URL(value) } catch { return undefined }
-    if (!['http:', 'https:'].includes(url.protocol)) return undefined
-    const cached = this.thumbnailCache.get(url.toString())
-    if (cached) return cached
-    const pending = this.fetchThumbnail(url, 0).catch(() => undefined)
-    this.thumbnailCache.set(url.toString(), pending)
-    if (this.thumbnailCache.size > 100) this.thumbnailCache.delete(this.thumbnailCache.keys().next().value!)
-    return pending
-  }
-  private fetchThumbnail(url: URL, redirects: number): Promise<string | undefined> {
-    return new Promise((resolve, reject) => {
-      if (redirects > 5) { reject(new Error('缩略图重定向次数过多')); return }
-      const transport = url.protocol === 'https:' ? https : http
-      const request = transport.get(url, { headers: { 'User-Agent': 'Mozilla/5.0 SocialVideoDownloader/0.1' } }, response => {
-        if (response.statusCode && [301, 302, 307, 308].includes(response.statusCode) && response.headers.location) {
-          response.resume(); this.fetchThumbnail(new URL(response.headers.location, url), redirects + 1).then(resolve, reject); return
-        }
-        const contentType = String(response.headers['content-type'] || '').split(';')[0]
-        const declaredSize = Number(response.headers['content-length']) || 0
-        if (response.statusCode !== 200 || !contentType.startsWith('image/') || declaredSize > 3 * 1024 * 1024) { response.resume(); resolve(undefined); return }
-        const chunks: Buffer[] = []; let size = 0
-        response.on('data', (chunk: Buffer) => {
-          size += chunk.length
-          if (size > 3 * 1024 * 1024) { response.destroy(new Error('缩略图过大')); return }
-          chunks.push(chunk)
-        })
-        response.on('end', () => resolve(`data:${contentType};base64,${Buffer.concat(chunks).toString('base64')}`))
-        response.on('error', reject)
-      })
-      request.setTimeout(10_000, () => request.destroy(new Error('缩略图加载超时')))
-      request.on('error', reject)
-    })
-  }
   async analyze(request: AnalyzeRequest): Promise<MediaItem[]> {
     const ytdlp = await this.tools.resolve('yt-dlp'); if (!ytdlp) throw new Error('未找到 yt-dlp，请先安装运行工具。')
     const urls = normalizeUrls(request.urls)
@@ -86,9 +50,9 @@ export class MediaService {
     }))
     return results
   }
-  async scan(request: ScanRequest, sender: WebContents) {
+  async scan(request: ScanRequest, report: (event: ScanEvent) => void) {
     const [url] = normalizeUrls(request.url); const scanId = randomUUID(); const seen = new Set<string>(); let count = 0
-    const emit = (event: ScanEvent) => { if (!sender.isDestroyed()) sender.send('creator:scan-progress', event) }
+    const emit = report
     const onItem = (item: MediaItem) => { const key = `${item.platform}:${item.id}`; if (seen.has(key)) return; seen.add(key); count++; emit({ type: 'item', scanId, item }) }
     void (async () => {
       try {
@@ -113,7 +77,7 @@ export class MediaService {
     const base = url.replace(/\/$/, ''); const username = new URL(base).pathname.split('/').filter(Boolean)[0] || 'Instagram'
     for (const section of ['posts', 'reels']) {
       emit({ type: 'status', scanId, message: `正在扫描 ${section === 'posts' ? '帖子' : 'Reels'}…` })
-      const args = ['-j', ...(source === 'none' ? [] : ['--cookies-from-browser', source]), `${base}/${section}/`]
+      const args = ['-j', ...cookieArgs(source), `${base}/${section}/`]
       await this.stream(tool, args, line => {
         const parsed = JSON.parse(line) as unknown
         const tuple = Array.isArray(parsed) ? parsed : []
