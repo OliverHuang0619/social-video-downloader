@@ -90,14 +90,14 @@ export class MediaService {
   private async scanInstagram(url: string, source: CookieSource, scanId: string, emit: (e: ScanEvent) => void, onItem: (i: MediaItem) => void) {
     const tool = await this.tools.resolve('gallery-dl'); if (!tool) throw new Error('Instagram 主页扫描需要 gallery-dl，请先点击“安装/更新工具”。')
     const base = url.replace(/\/$/, ''); const username = new URL(base).pathname.split('/').filter(Boolean)[0] || 'Instagram'
-    for (const section of ['posts', 'reels']) {
-      emit({ type: 'status', scanId, message: `正在扫描 ${section === 'posts' ? '帖子' : 'Reels'}…` })
-      const args = ['-j', '-o', 'output.jsonl=true', ...cookieArgs(source), `${base}/${section}/`]
-      await this.stream(tool, args, line => {
-        const item = mediaFromGalleryDlLine(line, username)
-        if (item) onItem(item)
-      })
-    }
+    // Instagram's posts feed already contains regular video posts and Reels.
+    // Scanning /reels/ again only repeats pagination and makes completion appear stuck.
+    emit({ type: 'status', scanId, message: '正在扫描帖子和 Reels…' })
+    const args = ['-j', '-o', 'output.jsonl=true', ...cookieArgs(source), `${base}/posts/`]
+    await this.stream(tool, args, line => {
+      const item = mediaFromGalleryDlLine(line, username)
+      if (item) onItem(item)
+    })
   }
   private stream(command: string, args: string[], onLine: (line: string) => void) {
     return new Promise<void>((resolve, reject) => {

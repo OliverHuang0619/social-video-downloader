@@ -24,6 +24,14 @@ export function parseDownloadOutput(line: string): ParsedDownloadOutput | undefi
   return undefined
 }
 
+export function buildOutputTemplate(folder: string, item: StartRequest['items'][number]) {
+  const rawDate = item.publishedAt.match(/^\d{4}-?\d{2}-?\d{2}/)?.[0] || 'unknown'
+  const date = rawDate === 'unknown' ? rawDate : rawDate.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3')
+  const title = sanitizeFilename(item.title, 40).replace(/%/g, '%%')
+  const id = sanitizeFilename(item.id, 40).replace(/%/g, '%%')
+  return path.join(folder, `${date}_${title}_[${id}].%(ext)s`)
+}
+
 export class DownloadQueue {
   private jobs = new Map<string, DownloadJob>(); private active = new Map<string, ChildProcessWithoutNullStreams>(); private report: (jobs: DownloadJob[]) => void = () => undefined
   constructor(private tools: ToolManager) {}
@@ -59,7 +67,7 @@ export class DownloadQueue {
     if (job.status === 'cancelled') { this.pump(); return }
     if (!ytdlp) { job.status = 'failed'; job.error = '未找到 yt-dlp'; this.emit(); this.pump(); return }
     const folder = job.item.collection ? path.join(job.options.outputRoot, sanitizeFilename(job.item.collection)) : job.options.outputRoot
-    const template = path.join(folder, '%(upload_date>%Y-%m-%d|unknown)s_%(title).120B_[%(id)s].%(ext)s')
+    const template = buildOutputTemplate(folder, job.item)
     // `download:` selects yt-dlp's progress-template type and is not printed.
     // Keep a second, literal prefix so the stream remains machine-readable.
     const args = ['--newline', '--no-overwrites', '--continue', '--retries', '3', '--fragment-retries', '3', '-o', template, '--progress-template', 'download:svd:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s', '--print', 'after_move:svd-file:%(filepath)s', ...buildFormatArgs(job.options, job.item)]
@@ -118,7 +126,7 @@ export class DownloadQueue {
   private transcodeQuickTime(job: DownloadJob, ffmpeg: string, input: string) {
     const parsed = path.parse(input)
     const output = path.join(parsed.dir, `${parsed.name}.quicktime.mp4`)
-    job.detail = '正在转换为 QuickTime 兼容格式…'; job.progress = 100; this.emit()
+    job.detail = '正在转换为 QuickTime 兼容格式…'; job.progress = 99; this.emit()
     return new Promise<string>((resolve, reject) => {
       const child = spawn(ffmpeg, ['-y', '-i', input, '-map', '0:v:0?', '-map', '0:a:0?', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-movflags', '+faststart', output], { windowsHide: true })
       this.active.set(job.id, child)

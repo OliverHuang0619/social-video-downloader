@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildFormatArgs, detectPlatform, formatsFromYtDlp, normalizeUrls, sanitizeFilename } from '../src/shared/core'
-import { DownloadQueue, parseDownloadOutput } from '../src/main/queue'
+import { buildOutputTemplate, DownloadQueue, parseDownloadOutput } from '../src/main/queue'
 import { mediaFromGalleryDlLine } from '../src/main/media'
 import type { DownloadOptions, MediaItem } from '../src/shared/types'
 
@@ -26,9 +26,19 @@ describe('核心工具', () => {
     const item = { selectedFormatId: '137+140', formats: [{ id: '137+140', selector: '137+140', kind: 'video-audio', ext: 'mp4', quickTimeCompatible: true }] } as MediaItem
     expect(buildFormatArgs(options, item)).toEqual(['-f', '137+140', '--merge-output-format', 'mp4'])
   })
+  it('Instagram 扫描直链不再传递无意义的格式选择', () => {
+    const item = { platform: 'instagram', selectedFormatId: 'best', formats: [{ id: 'best', selector: 'best', kind: 'video-audio', ext: 'mp4', quickTimeCompatible: false }] } as MediaItem
+    expect(buildFormatArgs(options, item)).toEqual([])
+  })
 })
 
 describe('下载队列', () => {
+  it('使用媒体标题而不是 CDN URL 生成安全的短文件名', () => {
+    const item = { id: 'ABC123', sourceUrl: `https://cdn.example/${'x'.repeat(400)}.mp4?token=secret`, platform: 'instagram', title: 'Talk to each other 😂', uploader: '', duration: 0, thumbnail: '', publishedAt: '20261001', selected: true, kind: 'video' } as MediaItem
+    const template = buildOutputTemplate('/downloads', item)
+    expect(template).toBe('/downloads/2026-10-01_Talk to each other 😂_[ABC123].%(ext)s')
+    expect(template).not.toContain('token')
+  })
   it('解析 yt-dlp 的机器可读进度和准备阶段', () => {
     expect(parseDownloadOutput('svd: 11.6%|36.04KiB/s|00:29')).toEqual({ progress: 11.6, speed: '36.04KiB/s', eta: '00:29', detail: '正在下载媒体文件…' })
     expect(parseDownloadOutput('Extracting cookies from chrome')).toEqual({ detail: '正在读取服务器 Cookie 文件…' })

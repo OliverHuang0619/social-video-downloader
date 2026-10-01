@@ -4,7 +4,7 @@ import { downloader } from './api'
 import './tool-progress.css'
 import './download-progress.css'
 
-const initialOptions: DownloadOptions = { mode: 'video', quality: 'best', container: 'mp4', audioFormat: 'mp3', audioBitrate: '192', outputRoot: '', cookieSource: 'none', quickTimeCompatible: true }
+const initialOptions: DownloadOptions = { mode: 'video', quality: 'best', container: 'mp4', audioFormat: 'mp3', audioBitrate: '192', outputRoot: '', cookieSource: 'file', quickTimeCompatible: true }
 const formatDuration = (value: number) => value ? `${Math.floor(value / 60)}:${String(Math.floor(value % 60)).padStart(2, '0')}` : '—'
 const statusLabel = { queued: '等待中', downloading: '下载中', completed: '已完成', skipped: '已存在', failed: '失败', cancelled: '已取消' }
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']+': Error:\s*/, '')
@@ -80,7 +80,18 @@ function App() {
     if (event.type === 'done') { setScanning(false); setMessage(`扫描完成，共发现 ${event.count} 个视频`) }
     if (event.type === 'error') { setScanning(false); setMessage(event.message) }
   }), [])
-  const selected = useMemo(() => items.filter(i => i.selected), [items]); const activeCount = jobs.filter(j => ['queued', 'downloading'].includes(j.status)).length
+  const selected = useMemo(() => items.filter(i => i.selected), [items])
+  const queueStats = useMemo(() => {
+    let completed = 0, downloading = 0, queued = 0, failed = 0, progress = 0
+    for (const job of jobs) {
+      progress += job.progress
+      if (job.status === 'completed' || job.status === 'skipped') completed++
+      else if (job.status === 'downloading') downloading++
+      else if (job.status === 'queued') queued++
+      else if (job.status === 'failed') failed++
+    }
+    return { completed, downloading, queued, failed, progress: jobs.length ? progress / jobs.length : 0 }
+  }, [jobs])
   const analyze = async () => { setMessage(''); if (!input.trim()) return; setBusy(true); setItems([]); try { const urls = input.split(/\r?\n/).filter(Boolean); setItems(await downloader.source.analyze({ urls, cookieSource: options.cookieSource })); setMessage(`已解析 ${urls.length} 个链接`) } catch (e) { setMessage(errorMessage(e)) } finally { setBusy(false) } }
   const scan = async () => { setItems([]); setMessage('正在开始扫描…'); setScanning(true); try { await downloader.creator.scan({ url: input, cookieSource: options.cookieSource }) } catch (e) { setScanning(false); setMessage(errorMessage(e)) } }
   const toggle = useCallback((id: string) => setItems(current => current.map(i => i.id === id ? { ...i, selected: !i.selected } : i)), [])
@@ -112,7 +123,7 @@ function App() {
           <button className="download" disabled={!selected.length || !options.outputRoot} onClick={start}>下载 {selected.length || ''} 个项目</button>
         </aside>
       </section>
-      {jobs.length ? <section className="queue"><div className="section-head"><div><h2>下载队列</h2><p>{activeCount ? `${activeCount} 项进行中 · 最多并发 3 项` : '队列已暂停或完成'}</p></div><button onClick={() => downloader.downloads.cancel()}>全部停止</button></div><div className="job-list">{jobs.map(job => <div className="job" key={job.id}><div className="job-top"><strong>{job.item.title}</strong><span className={`status ${job.status}`}>{statusLabel[job.status]}</span></div><div className="bar"><i className={job.status === 'downloading' && job.progress === 0 ? 'indeterminate' : ''} style={job.progress ? { width: `${job.progress}%` } : undefined} /></div><div className="job-meta"><span>{job.progress.toFixed(1)}% · {job.speed || '—'} · {job.eta && job.eta !== 'NA' ? `剩余 ${job.eta}` : '—'}</span><div>{job.status === 'failed' || job.status === 'cancelled' ? <button onClick={() => downloader.downloads.retry(job.id)}>重试</button> : null}{job.status === 'downloading' || job.status === 'queued' ? <button onClick={() => downloader.downloads.cancel(job.id)}>取消</button> : null}{job.outputPath && ['completed', 'skipped'].includes(job.status) ? <a className="local-download" href={downloader.downloads.fileUrl(job.id)}>下载到本地</a> : null}</div></div>{job.detail ? <p className="job-detail">{job.detail}</p> : null}{job.error ? <p className="job-error">{job.error}</p> : null}</div>)}</div></section> : null}
+      {jobs.length ? <section className="queue"><div className="section-head queue-head"><div><h2>下载队列</h2><p>{queueStats.completed} / {jobs.length} 已完成 · {queueStats.downloading} 项下载中 · {queueStats.queued} 项等待{queueStats.failed ? ` · ${queueStats.failed} 项失败` : ''}</p></div><div className="queue-head-actions"><div className="overall-progress" aria-label={`总体下载进度 ${queueStats.progress.toFixed(1)}%`}><strong>{queueStats.progress.toFixed(1)}%</strong><span><i style={{ width: `${queueStats.progress}%` }} /></span></div><button onClick={() => downloader.downloads.cancel()}>全部停止</button></div></div><div className="job-list">{jobs.map(job => <div className="job" key={job.id}><div className="job-top"><strong>{job.item.title}</strong><span className={`status ${job.status}`}>{statusLabel[job.status]}</span></div><div className="bar"><i className={job.status === 'downloading' && job.progress === 0 ? 'indeterminate' : ''} style={job.progress ? { width: `${job.progress}%` } : undefined} /></div><div className="job-meta"><span>{job.progress.toFixed(1)}% · {job.speed || '—'} · {job.eta && job.eta !== 'NA' ? `剩余 ${job.eta}` : '—'}</span><div>{job.status === 'failed' || job.status === 'cancelled' ? <button onClick={() => downloader.downloads.retry(job.id)}>重试</button> : null}{job.status === 'downloading' || job.status === 'queued' ? <button onClick={() => downloader.downloads.cancel(job.id)}>取消</button> : null}{job.outputPath && ['completed', 'skipped'].includes(job.status) ? <a className="local-download" href={downloader.downloads.fileUrl(job.id)}>下载到本地</a> : null}</div></div>{job.detail ? <p className="job-detail">{job.detail}</p> : null}{job.error ? <p className="job-error">{job.error}</p> : null}</div>)}</div></section> : null}
     </main>
     {showAbout ? <div className="modal-backdrop" onMouseDown={() => setShowAbout(false)}><div className="modal" onMouseDown={e => e.stopPropagation()}><button className="modal-close" onClick={() => setShowAbout(false)}>×</button><h2>关于视频收集器</h2><p>所有解析与下载都在你的服务器中完成。请仅下载你有权保存的内容，并遵守相关平台条款与当地法律。</p><h3>第三方工具</h3><ul><li>yt-dlp · Unlicense</li><li>gallery-dl · GPL-2.0</li><li>FFmpeg · LGPL/GPL（依构建配置）</li></ul></div></div> : null}
   </div>

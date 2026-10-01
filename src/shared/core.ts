@@ -33,6 +33,8 @@ export function sanitizeFilename(name: string, max = 120): string {
 
 export function buildFormatArgs(options: DownloadOptions, item?: MediaItem): string[] {
   const selected = item?.formats?.find(format => format.id === item.selectedFormatId)
+  // A scanned Instagram item is already a direct MP4 URL with one available stream.
+  if (item?.platform === 'instagram' && selected?.id === 'best') return []
   if (selected && /^[\w.-]+(?:\+[\w.-]+)?$/.test(selected.selector)) {
     const container = selected.ext === 'webm' ? 'webm' : 'mp4'
     return ['-f', selected.selector, '--merge-output-format', container]
