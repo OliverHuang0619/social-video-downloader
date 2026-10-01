@@ -1,0 +1,83 @@
+.tool-pill.updating {
+  color: #92c7ff;
+  border-color: #31598c;
+  background: #10233b;
+}
+
+.tool-panel {
+  position: absolute;
+  right: 34px;
+  top: 70px;
+  width: 390px;
+  border: 1px solid #2a3b55;
+  border-radius: 16px;
+  background: #0e1622f5;
+  box-shadow: 0 24px 80px #000a;
+  backdrop-filter: blur(22px);
+  overflow: hidden;
+  z-index: 20;
+}
+
+.tool-panel-head,
+.tool-panel-foot {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tool-panel-head {
+  padding: 18px 18px 13px;
+  border-bottom: 1px solid #1e2a3c;
+}
+
+.tool-panel-head strong { font-size: 15px; }
+.tool-panel-head p { margin: 4px 0 0; color: #8291a8; font-size: 12px; }
+.tool-panel-head button { border: 0; background: none; color: #7f8da3; font-size: 22px; line-height: 1; padding: 0; }
+.tool-progress-list { padding: 7px 18px; }
+
+.tool-progress-row {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 10px;
+  padding: 11px 0;
+  border-bottom: 1px solid #1a2535;
+}
+
+.tool-progress-row:last-child { border-bottom: 0; }
+.tool-state { width: 23px; height: 23px; display: grid; place-items: center; border-radius: 50%; background: #1b2636; color: #718098; font-weight: 800; font-size: 13px; }
+.tool-progress-row.done .tool-state { background: #153b32; color: #65e2b8; }
+.tool-progress-row.error .tool-state { background: #47232b; color: #ff8c9d; }
+.tool-progress-row.checking .tool-state,
+.tool-progress-row.downloading .tool-state,
+.tool-progress-row.installing .tool-state { color: #87b7ff; animation: tool-spin 1.2s linear infinite; }
+.tool-progress-copy > div:first-child { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+.tool-progress-copy strong { font-size: 13px; }
+.tool-progress-copy span { font-size: 11px; color: #8f9db2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tool-progress-track { height: 4px; margin-top: 8px; border-radius: 5px; background: #1d293a; overflow: hidden; }
+.tool-progress-track i { display: block; height: 100%; border-radius: 5px; background: linear-gradient(90deg, #33c9ec, #6579ff); transition: width .18s; }
+.tool-progress-track i.indeterminate { width: 38%; animation: tool-slide 1.15s ease-in-out infinite; }
+.tool-progress-copy small { display: block; margin-top: 6px; color: #718198; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tool-progress-row.error small { color: #ff8d9e; }
+
+.tool-panel-foot {
+  align-items: center;
+  padding: 13px 18px;
+  background: #0a111c;
+}
+
+.tool-panel-foot span { font-size: 10px; color: #68778d; }
+.tool-panel-foot button { border: 1px solid #345b90; border-radius: 8px; background: #162944; color: #9bc1ff; padding: 7px 11px; font-size: 11px; }
+.tool-panel-foot button:disabled { opacity: .55; cursor: not-allowed; }
+
+@keyframes tool-slide {
+  0% { transform: translateX(-110%); }
+  50% { transform: translateX(160%); }
+  100% { transform: translateX(320%); }
+}
+
+@keyframes tool-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 980px) {
+  .tool-panel { right: 14px; }
+}

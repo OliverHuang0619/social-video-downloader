@@ -1,0 +1,16 @@
+.bar i.indeterminate {
+  width: 38%;
+  animation: job-slide 1.15s ease-in-out infinite;
+}
+
+.job-detail {
+  margin: 8px 0 0;
+  color: #86a9dd;
+  font-size: 11px;
+}
+
+@keyframes job-slide {
+  0% { transform: translateX(-110%); }
+  50% { transform: translateX(130%); }
+  100% { transform: translateX(290%); }
+}

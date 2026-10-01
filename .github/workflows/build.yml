@@ -1,0 +1,30 @@
+name: build
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run build
+  package:
+    needs: test
+    strategy:
+      matrix: { os: [macos-15, windows-2025, ubuntu-24.04] }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - run: npm run dist
+        env: { GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} }
+      - uses: actions/upload-artifact@v4
+        with: { name: installer-${{ matrix.os }}, path: dist/* }
