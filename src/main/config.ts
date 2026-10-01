@@ -6,7 +6,7 @@ import type { CookieSource, DownloadOptions } from '../shared/types'
 interface AppConfig { outputRoot: string; cookieSource: CookieSource; options: Omit<DownloadOptions, 'outputRoot' | 'cookieSource'> }
 const defaults: AppConfig = {
   outputRoot: process.env.SVD_OUTPUT_DIR || path.join(os.homedir(), 'Downloads'), cookieSource: 'none',
-  options: { mode: 'video', quality: 'best', container: 'mp4', audioFormat: 'mp3', audioBitrate: '192' }
+  options: { mode: 'video', quality: 'best', container: 'mp4', audioFormat: 'mp3', audioBitrate: '192', quickTimeCompatible: true }
 }
 
 export class ConfigStore {

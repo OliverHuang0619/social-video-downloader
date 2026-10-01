@@ -2,6 +2,22 @@ export type Platform = 'youtube' | 'instagram' | 'other'
 export type MediaKind = 'video' | 'audio'
 export type JobStatus = 'queued' | 'downloading' | 'completed' | 'skipped' | 'failed' | 'cancelled'
 export type CookieSource = 'none' | 'file'
+export type MediaFormatKind = 'video-audio' | 'video-only' | 'audio-only'
+
+export interface MediaFormat {
+  id: string
+  selector: string
+  kind: MediaFormatKind
+  ext: string
+  width?: number
+  height?: number
+  fps?: number
+  bitrate?: number
+  videoCodec?: string
+  audioCodec?: string
+  filesize?: number
+  quickTimeCompatible: boolean
+}
 
 export interface MediaItem {
   id: string
@@ -15,6 +31,8 @@ export interface MediaItem {
   selected: boolean
   kind: 'video'
   collection?: string
+  formats?: MediaFormat[]
+  selectedFormatId?: string
 }
 
 export interface DownloadOptions {
@@ -25,6 +43,7 @@ export interface DownloadOptions {
   audioBitrate: '128' | '192' | '320'
   outputRoot: string
   cookieSource: CookieSource
+  quickTimeCompatible: boolean
 }
 
 export interface DownloadJob {
@@ -65,7 +84,7 @@ export interface DownloaderApi {
   source: { analyze(request: AnalyzeRequest): Promise<MediaItem[]> }
   creator: { scan(request: ScanRequest): Promise<{ scanId: string }>; stop(): Promise<void>; onProgress(cb: (event: ScanEvent) => void): () => void }
   destination: { current(): Promise<string> }
-  downloads: { start(request: StartRequest): Promise<DownloadJob[]>; cancel(id?: string): Promise<void>; retry(id: string): Promise<void>; onProgress(cb: (jobs: DownloadJob[]) => void): () => void }
+  downloads: { start(request: StartRequest): Promise<DownloadJob[]>; cancel(id?: string): Promise<void>; retry(id: string): Promise<void>; fileUrl(id: string): string; onProgress(cb: (jobs: DownloadJob[]) => void): () => void }
 }
 
 export type ScanEvent =

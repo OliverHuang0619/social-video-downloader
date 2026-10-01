@@ -1,10 +1,10 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import type { CookieSource, DownloadJob, DownloadOptions, MediaItem, ToolName, ToolStatus, ToolUpdateEvent } from '../../shared/types'
+import type { CookieSource, DownloadJob, DownloadOptions, MediaFormat, MediaFormatKind, MediaItem, ToolName, ToolStatus, ToolUpdateEvent } from '../../shared/types'
 import { downloader } from './api'
 import './tool-progress.css'
 import './download-progress.css'
 
-const initialOptions: DownloadOptions = { mode: 'video', quality: 'best', container: 'mp4', audioFormat: 'mp3', audioBitrate: '192', outputRoot: '', cookieSource: 'none' }
+const initialOptions: DownloadOptions = { mode: 'video', quality: 'best', container: 'mp4', audioFormat: 'mp3', audioBitrate: '192', outputRoot: '', cookieSource: 'none', quickTimeCompatible: true }
 const formatDuration = (value: number) => value ? `${Math.floor(value / 60)}:${String(Math.floor(value % 60)).padStart(2, '0')}` : '—'
 const statusLabel = { queued: '等待中', downloading: '下载中', completed: '已完成', skipped: '已存在', failed: '失败', cancelled: '已取消' }
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']+': Error:\s*/, '')
@@ -12,6 +12,12 @@ const toolLabels: Record<ToolName, string> = { 'yt-dlp': 'yt-dlp', 'gallery-dl':
 const toolNames: ToolName[] = ['yt-dlp', 'gallery-dl', 'ffmpeg']
 const formatBytes = (value?: number) => value === undefined ? '' : value >= 1024 * 1024 ? `${(value / 1024 / 1024).toFixed(1)} MB` : `${(value / 1024).toFixed(0)} KB`
 const formatEta = (seconds?: number) => seconds === undefined || !Number.isFinite(seconds) ? '' : seconds >= 3600 ? `${Math.ceil(seconds / 3600)} 小时` : seconds >= 60 ? `${Math.ceil(seconds / 60)} 分钟` : `${Math.ceil(seconds)} 秒`
+const formatGroupLabels: Record<MediaFormatKind, string> = { 'video-audio': '视频与音频', 'video-only': '仅视频', 'audio-only': '仅音频' }
+const formatLabel = (format: MediaFormat) => {
+  const resolution = format.height ? `${format.height}p${format.fps && format.fps > 30 ? `${Math.round(format.fps)}fps` : ''}` : format.bitrate ? `${Math.round(format.bitrate)}kbps` : '音频'
+  const codecs = [format.videoCodec, format.audioCodec].filter(Boolean).map(value => value!.split('.')[0]).join(' + ')
+  return `${format.ext.toUpperCase()} · ${resolution}${codecs ? ` · ${codecs}` : ''}${format.filesize ? ` · ${formatBytes(format.filesize)}` : ''}${format.quickTimeCompatible ? ' · QuickTime' : ''} · #${format.id}`
+}
 
 const ToolProgressPanel = memo(function ToolProgressPanel({ progress, updating, ready, onUpdate, onClose }: { progress: Partial<Record<ToolName, ToolUpdateEvent>>; updating: boolean; ready: boolean; onUpdate(): void; onClose(): void }) {
   return <section className="tool-panel" aria-live="polite">
@@ -31,7 +37,7 @@ const ToolProgressPanel = memo(function ToolProgressPanel({ progress, updating, 
   </section>
 })
 
-const MediaRow = memo(function MediaRow({ item, onToggle }: { item: MediaItem; onToggle(id: string): void }) {
+const MediaRow = memo(function MediaRow({ item, onToggle, onFormatChange }: { item: MediaItem; onToggle(id: string): void; onFormatChange(id: string, formatId: string): void }) {
   const rowRef = useRef<HTMLElement>(null)
   const [thumbnail, setThumbnail] = useState('')
   useEffect(() => {
@@ -48,7 +54,14 @@ const MediaRow = memo(function MediaRow({ item, onToggle }: { item: MediaItem; o
   return <article ref={rowRef} className={`media-row ${item.selected ? 'selected' : ''}`}>
     <label className="check"><input type="checkbox" checked={item.selected} onChange={() => onToggle(item.id)} /><span /></label>
     <div className="thumb">{thumbnail ? <img src={thumbnail} alt="" /> : <div className="thumb-empty">▶</div>}<small>{formatDuration(item.duration)}</small></div>
-    <div className="media-copy"><strong title={item.title}>{item.title}</strong><p>{item.uploader || '未知作者'} · {item.platform.toUpperCase()}</p></div>
+    <div className="media-copy"><strong title={item.title}>{item.title}</strong><p>{item.uploader || '未知作者'} · {item.platform.toUpperCase()}</p>
+      {item.formats?.length ? <select className="format-select" aria-label={`${item.title} 下载格式`} value={item.selectedFormatId} onChange={event => onFormatChange(item.id, event.target.value)}>
+        {(['video-audio', 'video-only', 'audio-only'] as MediaFormatKind[]).map(kind => {
+          const formats = item.formats!.filter(format => format.kind === kind)
+          return formats.length ? <optgroup key={kind} label={formatGroupLabels[kind]}>{formats.map(format => <option key={format.id} value={format.id}>{formatLabel(format)}</option>)}</optgroup> : null
+        })}
+      </select> : <small className="format-unavailable">该列表项目将在下载时自动选择最佳格式</small>}
+    </div>
   </article>
 })
 
@@ -71,6 +84,7 @@ function App() {
   const analyze = async () => { setMessage(''); if (!input.trim()) return; setBusy(true); setItems([]); try { const urls = input.split(/\r?\n/).filter(Boolean); setItems(await downloader.source.analyze({ urls, cookieSource: options.cookieSource })); setMessage(`已解析 ${urls.length} 个链接`) } catch (e) { setMessage(errorMessage(e)) } finally { setBusy(false) } }
   const scan = async () => { setItems([]); setMessage('正在开始扫描…'); setScanning(true); try { await downloader.creator.scan({ url: input, cookieSource: options.cookieSource }) } catch (e) { setScanning(false); setMessage(errorMessage(e)) } }
   const toggle = useCallback((id: string) => setItems(current => current.map(i => i.id === id ? { ...i, selected: !i.selected } : i)), [])
+  const changeFormat = useCallback((id: string, formatId: string) => setItems(current => current.map(item => item.id === id ? { ...item, selectedFormatId: formatId } : item)), [])
   const selectAll = (value: boolean) => setItems(current => current.map(i => ({ ...i, selected: value })))
   const start = async () => { if (!selected.length) return; setJobs(await downloader.downloads.start({ items: selected, options })) }
   const updateTools = async () => { if (toolUpdating) return; setToolPanelOpen(true); setToolUpdating(true); setMessage(''); setToolProgress(current => Object.fromEntries(toolNames.map(name => [name, current[name]?.phase === 'done' ? current[name] : { tool: name, phase: 'checking', progress: 0, message: '等待处理' }])) as Partial<Record<ToolName, ToolUpdateEvent>>); try { const status = await downloader.tools.update(); setTools(status); setMessage(status.ready ? '运行工具已就绪，可以开始解析' : '仍有工具不可用，请打开工具面板查看详情') } catch (e) { setMessage(`工具更新失败：${errorMessage(e)}`) } finally { setToolUpdating(false) } }
@@ -87,17 +101,18 @@ function App() {
       <section className="workspace">
         <div className="results">
           <div className="section-head"><div><h2>待下载视频</h2><p>{items.length ? `${selected.length} / ${items.length} 项已选择` : '解析后的视频会显示在这里'}</p></div>{items.length ? <div className="tiny-actions"><button onClick={() => selectAll(true)}>全选</button><button onClick={() => selectAll(false)}>取消全选</button></div> : null}</div>
-          <div className="media-list">{deferredItems.length ? deferredItems.map(item => <MediaRow key={`${item.platform}-${item.id}`} item={item} onToggle={toggle} />) : <div className="empty"><span>⌁</span><strong>还没有视频</strong><p>从上方粘贴链接并开始解析</p></div>}</div>
+          <div className="media-list">{deferredItems.length ? deferredItems.map(item => <MediaRow key={`${item.platform}-${item.id}`} item={item} onToggle={toggle} onFormatChange={changeFormat} />) : <div className="empty"><span>⌁</span><strong>还没有视频</strong><p>从上方粘贴链接并开始解析</p></div>}</div>
         </div>
         <aside className="settings">
           <div className="section-head"><div><h2>下载设置</h2><p>应用到本次选择</p></div></div>
           <label>服务器输出目录</label><div className="folder"><span>▣</span><b title={options.outputRoot}>{options.outputRoot || '正在读取…'}</b></div>
           <label>内容类型</label><div className="choice"><button className={options.mode === 'video' ? 'active' : ''} onClick={() => setOptions(v => ({ ...v, mode: 'video' }))}>视频</button><button className={options.mode === 'audio' ? 'active' : ''} onClick={() => setOptions(v => ({ ...v, mode: 'audio' }))}>仅音频</button></div>
           {options.mode === 'video' ? <><label>视频质量</label><select value={options.quality} onChange={e => setOptions(v => ({ ...v, quality: e.target.value as DownloadOptions['quality'] }))}>{['best','2160','1440','1080','720','480'].map(v => <option key={v} value={v}>{v === 'best' ? '最佳质量' : `${v}p 以内`}</option>)}</select><label>封装格式</label><select value={options.container} onChange={e => setOptions(v => ({ ...v, container: e.target.value as 'mp4' | 'mkv' }))}><option value="mp4">MP4</option><option value="mkv">MKV</option></select></> : <><label>音频格式</label><select value={options.audioFormat} onChange={e => setOptions(v => ({ ...v, audioFormat: e.target.value as 'mp3' | 'm4a' }))}><option value="mp3">MP3</option><option value="m4a">M4A</option></select><label>音频码率</label><select value={options.audioBitrate} onChange={e => setOptions(v => ({ ...v, audioBitrate: e.target.value as '128'|'192'|'320' }))}><option value="128">128 kbps</option><option value="192">192 kbps</option><option value="320">320 kbps</option></select></>}
+          <label>播放器兼容性</label><div className="choice"><button className={options.quickTimeCompatible ? 'active' : ''} onClick={() => setOptions(v => ({ ...v, quickTimeCompatible: true }))}>QuickTime</button><button className={!options.quickTimeCompatible ? 'active' : ''} onClick={() => setOptions(v => ({ ...v, quickTimeCompatible: false }))}>保持原编码</button></div>
           <button className="download" disabled={!selected.length || !options.outputRoot} onClick={start}>下载 {selected.length || ''} 个项目</button>
         </aside>
       </section>
-      {jobs.length ? <section className="queue"><div className="section-head"><div><h2>下载队列</h2><p>{activeCount ? `${activeCount} 项进行中 · 最多并发 3 项` : '队列已暂停或完成'}</p></div><button onClick={() => downloader.downloads.cancel()}>全部停止</button></div><div className="job-list">{jobs.map(job => <div className="job" key={job.id}><div className="job-top"><strong>{job.item.title}</strong><span className={`status ${job.status}`}>{statusLabel[job.status]}</span></div><div className="bar"><i className={job.status === 'downloading' && job.progress === 0 ? 'indeterminate' : ''} style={job.progress ? { width: `${job.progress}%` } : undefined} /></div><div className="job-meta"><span>{job.progress.toFixed(1)}% · {job.speed || '—'} · {job.eta && job.eta !== 'NA' ? `剩余 ${job.eta}` : '—'}</span><div>{job.status === 'failed' || job.status === 'cancelled' ? <button onClick={() => downloader.downloads.retry(job.id)}>重试</button> : null}{job.status === 'downloading' || job.status === 'queued' ? <button onClick={() => downloader.downloads.cancel(job.id)}>取消</button> : null}</div></div>{job.detail ? <p className="job-detail">{job.detail}</p> : null}{job.error ? <p className="job-error">{job.error}</p> : null}</div>)}</div></section> : null}
+      {jobs.length ? <section className="queue"><div className="section-head"><div><h2>下载队列</h2><p>{activeCount ? `${activeCount} 项进行中 · 最多并发 3 项` : '队列已暂停或完成'}</p></div><button onClick={() => downloader.downloads.cancel()}>全部停止</button></div><div className="job-list">{jobs.map(job => <div className="job" key={job.id}><div className="job-top"><strong>{job.item.title}</strong><span className={`status ${job.status}`}>{statusLabel[job.status]}</span></div><div className="bar"><i className={job.status === 'downloading' && job.progress === 0 ? 'indeterminate' : ''} style={job.progress ? { width: `${job.progress}%` } : undefined} /></div><div className="job-meta"><span>{job.progress.toFixed(1)}% · {job.speed || '—'} · {job.eta && job.eta !== 'NA' ? `剩余 ${job.eta}` : '—'}</span><div>{job.status === 'failed' || job.status === 'cancelled' ? <button onClick={() => downloader.downloads.retry(job.id)}>重试</button> : null}{job.status === 'downloading' || job.status === 'queued' ? <button onClick={() => downloader.downloads.cancel(job.id)}>取消</button> : null}{job.outputPath && ['completed', 'skipped'].includes(job.status) ? <a className="local-download" href={downloader.downloads.fileUrl(job.id)}>下载到本地</a> : null}</div></div>{job.detail ? <p className="job-detail">{job.detail}</p> : null}{job.error ? <p className="job-error">{job.error}</p> : null}</div>)}</div></section> : null}
     </main>
     {showAbout ? <div className="modal-backdrop" onMouseDown={() => setShowAbout(false)}><div className="modal" onMouseDown={e => e.stopPropagation()}><button className="modal-close" onClick={() => setShowAbout(false)}>×</button><h2>关于视频收集器</h2><p>所有解析与下载都在你的服务器中完成。请仅下载你有权保存的内容，并遵守相关平台条款与当地法律。</p><h3>第三方工具</h3><ul><li>yt-dlp · Unlicense</li><li>gallery-dl · GPL-2.0</li><li>FFmpeg · LGPL/GPL（依构建配置）</li></ul></div></div> : null}
   </div>

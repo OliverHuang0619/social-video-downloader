@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { buildFormatArgs, detectPlatform, normalizeUrls, sanitizeFilename } from '../src/shared/core'
+import { buildFormatArgs, detectPlatform, formatsFromYtDlp, normalizeUrls, sanitizeFilename } from '../src/shared/core'
 import { DownloadQueue, parseDownloadOutput } from '../src/main/queue'
+import { mediaFromGalleryDlLine } from '../src/main/media'
 import type { DownloadOptions, MediaItem } from '../src/shared/types'
 
-const options: DownloadOptions = { mode: 'video', quality: '1080', container: 'mp4', audioFormat: 'mp3', audioBitrate: '192', outputRoot: '/tmp', cookieSource: 'none' }
+const options: DownloadOptions = { mode: 'video', quality: '1080', container: 'mp4', audioFormat: 'mp3', audioBitrate: '192', outputRoot: '/tmp', cookieSource: 'none', quickTimeCompatible: true }
 describe('核心工具', () => {
   it('规范化并去重 URL', () => expect(normalizeUrls('https://youtu.be/a\nhttps://youtu.be/a#x')).toEqual(['https://youtu.be/a']))
   it('拒绝非 HTTP URL', () => expect(() => normalizeUrls('file:///etc/passwd')).toThrow('不支持'))
@@ -11,6 +12,20 @@ describe('核心工具', () => {
   it('清理跨平台文件名', () => expect(sanitizeFilename('a:b/c*? ')).toBe('a_b_c__'))
   it('生成限制高度的视频参数', () => expect(buildFormatArgs(options)).toContain('bestvideo[height<=1080]+bestaudio/best[height<=1080]'))
   it('生成音频参数', () => expect(buildFormatArgs({ ...options, mode: 'audio' })).toEqual(['-x', '--audio-format', 'mp3', '--audio-quality', '192K']))
+  it('解析全部媒体格式并生成音视频组合', () => {
+    const formats = formatsFromYtDlp({ formats: [
+      { format_id: '137', ext: 'mp4', height: 1080, vcodec: 'avc1.640028', acodec: 'none', filesize: 10 },
+      { format_id: '140', ext: 'm4a', vcodec: 'none', acodec: 'mp4a.40.2', filesize: 3 },
+      { format_id: '248', ext: 'webm', height: 1080, vcodec: 'vp9', acodec: 'none', filesize: 8 }
+    ] })
+    expect(formats.find(format => format.id === '137+140')).toMatchObject({ kind: 'video-audio', quickTimeCompatible: true, ext: 'mp4' })
+    expect(formats.some(format => format.kind === 'video-only')).toBe(true)
+    expect(formats.some(format => format.kind === 'audio-only')).toBe(true)
+  })
+  it('使用用户选择的精确格式', () => {
+    const item = { selectedFormatId: '137+140', formats: [{ id: '137+140', selector: '137+140', kind: 'video-audio', ext: 'mp4', quickTimeCompatible: true }] } as MediaItem
+    expect(buildFormatArgs(options, item)).toEqual(['-f', '137+140', '--merge-output-format', 'mp4'])
+  })
 })
 
 describe('下载队列', () => {
@@ -26,5 +41,16 @@ describe('下载队列', () => {
     const jobs = await queue.start({ items: ['1', '2', '3', '4', '5'].map(item), options }, () => undefined)
     expect(jobs.filter(job => job.status === 'downloading')).toHaveLength(3)
     expect(jobs.filter(job => job.status === 'queued')).toHaveLength(2)
+  })
+})
+
+describe('Instagram 扫描', () => {
+  it('解析 gallery-dl JSONL 的视频记录并忽略图片', () => {
+    const video = mediaFromGalleryDlLine(JSON.stringify([2, 'https://cdn.example/media', { extension: 'mp4', post_shortcode: 'abc', username: 'owner' }]), 'fallback')
+    expect(video).toMatchObject({ id: 'abc', sourceUrl: 'https://cdn.example/media', uploader: 'owner' })
+    expect(mediaFromGalleryDlLine(JSON.stringify([2, 'https://cdn.example/image.jpg', { extension: 'jpg' }]), 'fallback')).toBeUndefined()
+  })
+  it('把 gallery-dl 内嵌错误显示给用户', () => {
+    expect(() => mediaFromGalleryDlLine(JSON.stringify([-1, { error: 'AuthError', message: 'login required' }]), 'owner')).toThrow('login required')
   })
 })

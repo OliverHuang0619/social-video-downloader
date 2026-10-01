@@ -106,8 +106,7 @@ export class ToolManager {
       report({ tool: 'yt-dlp', phase: 'done', progress: 100, message: '安装完成' })
 
       activeTool = 'gallery-dl'
-      if (!(await this.resolve('gallery-dl'))) await this.installGalleryDl(report)
-      else report({ tool: 'gallery-dl', phase: 'done', progress: 100, message: '已安装，无需处理' })
+      await this.installGalleryDl(report)
 
       activeTool = 'ffmpeg'
       report({ tool: 'ffmpeg', phase: 'checking', progress: 0, message: '正在检查' })

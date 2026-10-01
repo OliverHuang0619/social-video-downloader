@@ -33,6 +33,21 @@ function classifyError(error: string) {
   return value.split(/\r?\n/).filter(Boolean).slice(-3).join('\n') || '解析失败'
 }
 
+export function mediaFromGalleryDlLine(line: string, username: string): MediaItem | undefined {
+  const parsed = JSON.parse(line) as unknown
+  const tuple = Array.isArray(parsed) ? parsed : []
+  if (tuple[0] === -1) {
+    const failure = tuple[1] && typeof tuple[1] === 'object' ? tuple[1] as Record<string, unknown> : {}
+    throw new Error(String(failure.message || failure.error || 'Instagram 扫描失败'))
+  }
+  const data = (tuple[2] && typeof tuple[2] === 'object' ? tuple[2] : {}) as Record<string, unknown>
+  const directUrl = String(data.video_url || tuple[1] || '')
+  const extension = String(data.extension || '').toLowerCase()
+  if (!directUrl || (!data.video_url && extension !== 'mp4' && !/\.mp4(?:\?|$)/i.test(directUrl))) return undefined
+  const shortcode = String(data.shortcode || data.post_shortcode || data.media_id || randomUUID())
+  return { id: shortcode, sourceUrl: directUrl, platform: 'instagram', title: String(data.description || `Instagram 视频 ${shortcode}`).slice(0, 160), uploader: String(data.username || username), duration: Number(data.duration || 0), thumbnail: String(data.display_url || data.thumbnail_url || ''), publishedAt: String(data.date || data.post_date || ''), selected: true, kind: 'video', collection: username, formats: [{ id: 'best', selector: 'best', kind: 'video-audio', ext: 'mp4', quickTimeCompatible: false }], selectedFormatId: 'best' }
+}
+
 export class MediaService {
   private scanProcess?: ChildProcessWithoutNullStreams
   constructor(private tools: ToolManager) {}
@@ -77,24 +92,23 @@ export class MediaService {
     const base = url.replace(/\/$/, ''); const username = new URL(base).pathname.split('/').filter(Boolean)[0] || 'Instagram'
     for (const section of ['posts', 'reels']) {
       emit({ type: 'status', scanId, message: `正在扫描 ${section === 'posts' ? '帖子' : 'Reels'}…` })
-      const args = ['-j', ...cookieArgs(source), `${base}/${section}/`]
+      const args = ['-j', '-o', 'output.jsonl=true', ...cookieArgs(source), `${base}/${section}/`]
       await this.stream(tool, args, line => {
-        const parsed = JSON.parse(line) as unknown
-        const tuple = Array.isArray(parsed) ? parsed : []
-        const data = (tuple[2] && typeof tuple[2] === 'object' ? tuple[2] : {}) as Record<string, unknown>
-        const directUrl = String(data.video_url || tuple[1] || '')
-        if (!directUrl || (!data.video_url && !/\.mp4(?:\?|$)/i.test(directUrl))) return
-        const shortcode = String(data.shortcode || data.post_shortcode || data.media_id || randomUUID())
-        onItem({ id: shortcode, sourceUrl: directUrl, platform: 'instagram', title: String(data.description || `Instagram 视频 ${shortcode}`).slice(0, 160), uploader: String(data.username || username), duration: Number(data.duration || 0), thumbnail: String(data.display_url || ''), publishedAt: String(data.date || data.post_date || ''), selected: true, kind: 'video', collection: username })
+        const item = mediaFromGalleryDlLine(line, username)
+        if (item) onItem(item)
       })
     }
   }
   private stream(command: string, args: string[], onLine: (line: string) => void) {
     return new Promise<void>((resolve, reject) => {
-      const child = spawn(command, args, { windowsHide: true }); this.scanProcess = child; let buffer = '', error = ''
-      child.stdout.on('data', chunk => { buffer += chunk.toString(); const lines = buffer.split(/\r?\n/); buffer = lines.pop() || ''; for (const line of lines) if (line.trim()) { try { onLine(line) } catch { /* ignore non-json chatter */ } } })
+      const child = spawn(command, args, { windowsHide: true }); this.scanProcess = child; let buffer = '', error = '', callbackError: Error | undefined
+      const processLine = (line: string) => {
+        if (!line.trim() || callbackError) return
+        try { onLine(line) } catch (value) { callbackError = value instanceof Error ? value : new Error(String(value)); child.kill('SIGTERM') }
+      }
+      child.stdout.on('data', chunk => { buffer += chunk.toString(); const lines = buffer.split(/\r?\n/); buffer = lines.pop() || ''; for (const line of lines) processLine(line) })
       child.stderr.on('data', d => error += d)
-      child.on('close', code => { if (buffer.trim()) { try { onLine(buffer) } catch {} } code === 0 || code === null ? resolve() : reject(new Error(classifyError(error))) })
+      child.on('close', code => { if (buffer.trim()) processLine(buffer); callbackError ? reject(callbackError) : code === 0 || code === null ? resolve() : reject(new Error(classifyError(error))) })
       child.on('error', reject)
     })
   }

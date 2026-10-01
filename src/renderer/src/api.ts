@@ -26,7 +26,7 @@ export const downloader: DownloaderApi = {
   creator: { scan: value => post('/api/creator/scan', value), stop: () => post('/api/creator/stop'), onProgress: callback => subscribe(scanListeners, callback) },
   destination: { current: () => request('/api/destination') },
   downloads: {
-    start: value => post('/api/downloads/start', value), cancel: id => post('/api/downloads/cancel', { id }), retry: id => post('/api/downloads/retry', { id }),
+    start: value => post('/api/downloads/start', value), cancel: id => post('/api/downloads/cancel', { id }), retry: id => post('/api/downloads/retry', { id }), fileUrl: id => `/api/downloads/${encodeURIComponent(id)}/file`,
     onProgress: callback => subscribe(downloadListeners, callback)
   }
 }

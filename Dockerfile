@@ -14,7 +14,11 @@ ENV NODE_ENV=production \
     SVD_CONFIG_DIR=/config \
     SVD_COOKIES_FILE=/config/cookies.txt
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg gallery-dl yt-dlp ca-certificates tini gosu \
+    && apt-get install -y --no-install-recommends ffmpeg python3 python3-venv ca-certificates tini gosu \
+    && python3 -m venv /opt/media-tools \
+    && /opt/media-tools/bin/pip install --no-cache-dir --upgrade yt-dlp gallery-dl \
+    && ln -s /opt/media-tools/bin/yt-dlp /usr/local/bin/yt-dlp \
+    && ln -s /opt/media-tools/bin/gallery-dl /usr/local/bin/gallery-dl \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /app/dist /downloads /config \
     && chown -R node:node /app /downloads /config

@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs'
-import { mkdir, stat } from 'node:fs/promises'
+import { mkdir, realpath, stat } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -60,6 +60,24 @@ async function staticFile(requestPath: string, response: ServerResponse) {
   createReadStream(target).pipe(response)
 }
 
+async function downloadFile(id: string, response: ServerResponse) {
+  const job = queue.get(id)
+  if (!job?.outputPath || !['completed', 'skipped'].includes(job.status)) return json(response, 404, { error: '下载文件不存在' })
+  const [root, file] = await Promise.all([realpath(config.get().outputRoot), realpath(job.outputPath)])
+  const relative = path.relative(root, file)
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return json(response, 403, { error: '不允许访问该文件' })
+  const info = await stat(file)
+  if (!info.isFile()) return json(response, 404, { error: '下载文件不存在' })
+  const encodedName = encodeURIComponent(path.basename(file)).replace(/[!'()*]/g, character => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)
+  response.writeHead(200, {
+    'content-type': 'application/octet-stream',
+    'content-length': info.size,
+    'content-disposition': `attachment; filename*=UTF-8''${encodedName}`,
+    'cache-control': 'private, no-store'
+  })
+  createReadStream(file).pipe(response)
+}
+
 async function api(request: IncomingMessage, response: ServerResponse, pathname: string) {
   if (request.method === 'GET' && pathname === '/api/health') return json(response, 200, { ok: true })
   if (request.method === 'GET' && pathname === '/api/events') {
@@ -76,10 +94,12 @@ async function api(request: IncomingMessage, response: ServerResponse, pathname:
   if (request.method === 'POST' && pathname === '/api/creator/scan') return json(response, 200, await media.scan(await body<ScanRequest>(request), event => publish({ type: 'creator', event })))
   if (request.method === 'POST' && pathname === '/api/creator/stop') { media.stop(); return json(response, 200, null) }
   if (request.method === 'GET' && pathname === '/api/destination') return json(response, 200, config.get().outputRoot)
+  const fileMatch = request.method === 'GET' && pathname.match(/^\/api\/downloads\/([0-9a-f-]+)\/file$/)
+  if (fileMatch) return downloadFile(fileMatch[1], response)
   if (request.method === 'POST' && pathname === '/api/downloads/start') {
     const requestBody = await body<StartRequest>(request)
     requestBody.options.outputRoot = config.get().outputRoot
-    await config.patch({ cookieSource: requestBody.options.cookieSource, options: { mode: requestBody.options.mode, quality: requestBody.options.quality, container: requestBody.options.container, audioFormat: requestBody.options.audioFormat, audioBitrate: requestBody.options.audioBitrate } })
+    await config.patch({ cookieSource: requestBody.options.cookieSource, options: { mode: requestBody.options.mode, quality: requestBody.options.quality, container: requestBody.options.container, audioFormat: requestBody.options.audioFormat, audioBitrate: requestBody.options.audioBitrate, quickTimeCompatible: requestBody.options.quickTimeCompatible } })
     return json(response, 200, await queue.start(requestBody, jobs => publish({ type: 'downloads', jobs })))
   }
   if (request.method === 'POST' && pathname === '/api/downloads/cancel') { queue.cancel((await body<{ id?: string }>(request)).id); return json(response, 200, null) }
