@@ -1,0 +1,4 @@
+interface:
+  display_name: "English Video Catalog"
+  short_description: "分类英文视频并生成可搜索、可筛选、可一键复制的本地总结网页"
+  default_prompt: "Use $english-video-catalog to classify and summarize the English videos in this path, then open the local copy-friendly report."
