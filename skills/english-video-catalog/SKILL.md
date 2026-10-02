@@ -80,11 +80,14 @@ The HTML report must:
 - ensure nonmatching cards are actually hidden in the rendered layout, so the visible cards always agree with the filtered count;
 - retain title/category/topic/summary search and category filtering;
 - provide separate copy buttons for the Chinese title, English title, key topics, and summary, plus a whole-card copy action;
+- provide a per-video playback button that opens an in-page player with standard controls and seeking when the report is served locally; only stream video paths listed in the current report;
 - use an explicit `搜索` button to apply keyword search, and apply the same search when Enter is pressed in the search field. Keep category and processing-status filters immediate.
 - provide a per-video Douyin publish button and multi-select batch publishing controls when the report is served through `serve_report.py`;
 - prefill the publish title from `english_title`, enforcing Douyin's 30-character limit, and prefill up to five topics with visible `#` prefixes;
 - support immediate or scheduled single-video publishing, plus two batch modes: submit the full schedule to Douyin now, or keep jobs locally and publish each one when due; require a future batch start time, allow editing single-video metadata, and default batch spacing to one hour;
 - show persistent local publishing history and link to Douyin's work-management page;
+- allow deleting one completed publishing batch or clearing all completed publishing history and its local diagnostic screenshots; never clear a queued, waiting, or running task;
+- when served locally, allow selecting another absolute directory and switch to its existing complete report without rerunning analysis; only start a background Codex run when no complete report exists or the user explicitly clicks `重新分析`, write new reports beside the source directory, and switch to the target localhost report;
 - show a final confirmation before the local bridge uploads or publishes. Never create a real publishing task merely by opening the report.
 
 ## Direct Douyin web publishing
@@ -96,6 +99,8 @@ The first use requires the user to click `登录抖音` and scan the official lo
 Keep browser automation visible and identifiable. Do not alter browser fingerprints, hide automation indicators, bypass CAPTCHA or safety checks, or add randomized “human-like” behavior intended to evade platform detection. Use ordinary DOM interactions with fixed, observable pacing (scroll, click, wait for response, and type text character by character), a fixed cooldown between platform submissions, and stop the batch when any job needs login or manual review.
 
 Use the English title as the work title and append visible `#` topics to the description. The report may request the platform's `内容由AI生成` declaration; keep it selected by default for AI-generated videos but let the user change it before submission. For platform scheduling, validate times as at least two hours and no more than seven days ahead. For local scheduling, persist the queue, require the first execution at least one minute ahead, resume waiting jobs after a service restart, and clearly warn that the local service and computer must remain available. Process every batch serially to avoid concurrent use of the same browser profile.
+
+Directory switching should reuse a complete existing report whose `results.json` source matches the selected directory. Do not invoke Codex again unless the report is missing or the user explicitly chooses `重新分析`. New or forced analysis requires a logged-in local Codex CLI. Prefer the CLI bundled with the ChatGPT desktop app, run it with workspace access limited to the selected directory's parent, and keep the run ephemeral. Require explicit confirmation before starting or rerunning analysis, allow only one active analysis at a time, and never modify the selected source videos. Start the target report on a free localhost port and navigate to it only after both `results.json` and `index.html` exist.
 
 ## Scripts
 

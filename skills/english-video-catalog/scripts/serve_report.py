@@ -6,18 +6,22 @@ from __future__ import annotations
 import argparse
 import http.server
 import json
+import mimetypes
 import os
 import shutil
 import sqlite3
 import subprocess
+import sys
 import threading
 import time
 import uuid
+from urllib.parse import parse_qs, urlsplit
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
 ACTIVE_STATES = {"launching", "uploading", "scheduling", "submitting", "running"}
+PENDING_STATES = ACTIVE_STATES | {"queued", "waiting_local"}
 BATCH_COOLDOWN_SECONDS = 30
 
 
@@ -252,6 +256,35 @@ class DouyinBrowserBridge:
         threading.Thread(target=self._run_batch, args=(batch_id,), daemon=True).start()
         return batch
 
+    def clear_history(self, batch_id=None):
+        with self.lock:
+            if batch_id:
+                targets = [batch_id] if batch_id in self.batches else []
+                if not targets:
+                    raise ValueError("发布任务不存在")
+            else:
+                targets = list(self.batches)
+            active = [
+                item_id for item_id in targets
+                if self.batches[item_id].get("status") in PENDING_STATES
+                or any(job.get("status") in PENDING_STATES for job in self.batches[item_id].get("jobs", []))
+            ]
+            if active:
+                raise ValueError("仍有等待或执行中的任务，完成或停止后才能清除")
+            removed = [self.batches.pop(item_id) for item_id in targets]
+            self._save()
+
+        artifact_root = self.artifact_dir.resolve()
+        for batch in removed:
+            for job in batch.get("jobs", []):
+                screenshot = job.get("screenshot")
+                if not screenshot:
+                    continue
+                screenshot_path = Path(screenshot).expanduser().resolve()
+                if screenshot_path.parent == artifact_root:
+                    screenshot_path.unlink(missing_ok=True)
+        return {"removed": len(removed), "remaining": len(self.batches)}
+
     def _set_job(self, batch_id, job, status, **values):
         with self.lock:
             job["status"] = status
@@ -346,7 +379,147 @@ class DouyinBrowserBridge:
             self._save()
 
 
-def make_handler(directory: Path, bridge: DouyinBrowserBridge):
+class CatalogAnalysisBridge:
+    def __init__(self):
+        bundled = Path("/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex")
+        configured = os.environ.get("ENGLISH_VIDEO_CATALOG_CODEX")
+        self.codex = Path(configured).expanduser() if configured else (bundled if bundled.is_file() else None)
+        if self.codex is None:
+            discovered = shutil.which("codex")
+            self.codex = Path(discovered) if discovered else None
+        self.skill_path = Path.home() / ".codex/skills/english-video-catalog/SKILL.md"
+        self.server_script = Path(__file__).resolve()
+        self.lock = threading.RLock()
+        self.task = None
+        self.report_servers = {}
+
+    def status(self):
+        with self.lock:
+            task = dict(self.task) if self.task else None
+        return {
+            "ready": bool(self.codex and self.codex.is_file() and self.skill_path.is_file()),
+            "message": "可选择新目录并调用 Codex 分析" if self.codex and self.codex.is_file() else "未找到可用的 Codex 命令行",
+            "task": task,
+        }
+
+    def choose_directory(self):
+        osascript = shutil.which("osascript")
+        if not osascript:
+            raise RuntimeError("当前系统不支持原生目录选择，请直接填写绝对路径")
+        script = 'POSIX path of (choose folder with prompt "选择要分析的英文视频目录")'
+        result = subprocess.run([osascript, "-e", script], capture_output=True, text=True, timeout=300)
+        if result.returncode != 0:
+            message = result.stderr.strip()
+            if "User canceled" in message or "-128" in message:
+                raise ValueError("已取消选择目录")
+            raise RuntimeError(message or "无法打开目录选择器")
+        return str(Path(result.stdout.strip()).expanduser().resolve())
+
+    def _existing_report_ready(self, source, output):
+        try:
+            results = json.loads((output / "results.json").read_text(encoding="utf-8"))
+            source_value = results.get("source")
+            if not isinstance(source_value, str) or not source_value.strip():
+                return False
+            report_source = Path(source_value).expanduser().resolve()
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return False
+        return report_source == source and (output / "index.html").is_file()
+
+    def _serve_report(self, output):
+        key = str(output.resolve())
+        with self.lock:
+            existing = self.report_servers.get(key)
+            if existing and existing[0].poll() is None:
+                return existing[1]
+            process = subprocess.Popen(
+                [sys.executable, str(self.server_script), str(output), "--port", "0"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
+            )
+            assert process.stdout is not None
+            report_url = process.stdout.readline().strip()
+            if not report_url.startswith("http://"):
+                detail = process.stderr.read().strip() if process.stderr else ""
+                process.terminate()
+                raise RuntimeError(detail or "报告服务启动失败")
+            self.report_servers[key] = (process, report_url)
+            return report_url
+
+    def start(self, source_value, force=False):
+        source = Path(str(source_value or "")).expanduser().resolve()
+        if not source.is_dir():
+            raise ValueError("请选择存在的视频目录")
+        output = source.parent / f"{source.name}-catalog-report"
+        with self.lock:
+            if self.task and self.task.get("status") in {"queued", "running", "starting_report"}:
+                if not force and self.task.get("source") == str(source):
+                    return dict(self.task)
+                raise ValueError("已有目录正在分析，请等待当前任务完成")
+        if not force and self._existing_report_ready(source, output):
+            task_id = uuid.uuid4().hex[:12]
+            report_url = self._serve_report(output)
+            with self.lock:
+                self.task = {
+                    "id": task_id, "status": "completed", "source": str(source),
+                    "output": str(output), "message": "已找到现有报告，未重复分析",
+                    "reportUrl": report_url, "cached": True,
+                    "createdAt": datetime.now().astimezone().isoformat(),
+                    "completedAt": datetime.now().astimezone().isoformat(),
+                }
+            return self.status()["task"]
+        if not self.codex or not self.codex.is_file() or not self.skill_path.is_file():
+            raise RuntimeError("Codex 或 english-video-catalog 技能不可用")
+        with self.lock:
+            task_id = uuid.uuid4().hex[:12]
+            self.task = {
+                "id": task_id,
+                "status": "queued",
+                "source": str(source),
+                "output": str(output),
+                "message": "分析任务已创建",
+                "createdAt": datetime.now().astimezone().isoformat(),
+            }
+        threading.Thread(target=self._run, args=(task_id, source, output), daemon=True).start()
+        return self.status()["task"]
+
+    def _update(self, task_id, **values):
+        with self.lock:
+            if self.task and self.task.get("id") == task_id:
+                self.task.update(values)
+
+    def _run(self, task_id, source, output):
+        self._update(task_id, status="running", message="Codex 正在分析视频并生成中文报告")
+        prompt = (
+            f"使用 $english-video-catalog（{self.skill_path}）分析英文视频目录：{source}\n"
+            f"生成中文分类、中文总结和关键英文标题，输出必须写入：{output}\n"
+            "完整执行媒体清单、逐视频证据分析、results.json 校验和 index.html 生成。"
+            "不要移动或修改源视频，不要启动网页服务器或打开浏览器；完成文件生成后直接结束。"
+        )
+        command = [
+            str(self.codex), "--ask-for-approval", "never",
+            "--sandbox", "workspace-write", "--cd", str(source.parent),
+            "exec", "--ephemeral", "--skip-git-repo-check", prompt,
+        ]
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=6 * 60 * 60)
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout).strip()[-2000:]
+                raise RuntimeError(detail or "Codex 分析失败")
+            if not (output / "results.json").is_file() or not (output / "index.html").is_file():
+                raise RuntimeError("Codex 已结束，但没有生成完整的 results.json 和 index.html")
+            self._update(task_id, status="starting_report", message="分析完成，正在启动新报告")
+            report_url = self._serve_report(output)
+            self._update(
+                task_id, status="completed", message="新目录分析完成",
+                reportUrl=report_url, completedAt=datetime.now().astimezone().isoformat(),
+            )
+        except subprocess.TimeoutExpired:
+            self._update(task_id, status="failed", message="目录分析超过 6 小时，已停止")
+        except Exception as error:
+            self._update(task_id, status="failed", message=str(error))
+
+
+def make_handler(directory: Path, bridge: DouyinBrowserBridge, analyzer: CatalogAnalysisBridge):
     class Handler(http.server.SimpleHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=str(directory), **kwargs)
@@ -360,24 +533,102 @@ def make_handler(directory: Path, bridge: DouyinBrowserBridge):
             self.end_headers()
             self.wfile.write(body)
 
+        def media_response(self, send_body=True):
+            query = parse_qs(urlsplit(self.path).query)
+            requested = Path(query.get("file", [""])[0]).expanduser().resolve()
+            if str(requested) not in bridge.allowed_files or not requested.is_file():
+                return self.send_error(404, "Video not found")
+            size = requested.stat().st_size
+            start, end, status = 0, max(0, size - 1), 200
+            range_header = self.headers.get("Range")
+            if range_header:
+                try:
+                    unit, value = range_header.split("=", 1)
+                    if unit.strip() != "bytes" or "," in value:
+                        raise ValueError
+                    first, last = value.strip().split("-", 1)
+                    if first:
+                        start = int(first)
+                        end = int(last) if last else size - 1
+                    else:
+                        suffix = int(last)
+                        start = max(0, size - suffix)
+                        end = size - 1
+                    if start < 0 or end < start or start >= size:
+                        raise ValueError
+                    end = min(end, size - 1)
+                    status = 206
+                except (ValueError, TypeError):
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{size}")
+                    self.end_headers()
+                    return
+            length = end - start + 1 if size else 0
+            self.send_response(status)
+            self.send_header("Content-Type", mimetypes.guess_type(requested.name)[0] or "application/octet-stream")
+            self.send_header("Content-Length", str(length))
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Cache-Control", "private, max-age=3600")
+            if status == 206:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.end_headers()
+            if not send_body:
+                return
+            try:
+                with requested.open("rb") as source:
+                    source.seek(start)
+                    remaining = length
+                    while remaining:
+                        chunk = source.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        remaining -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
         def do_GET(self):
+            if urlsplit(self.path).path == "/api/media":
+                return self.media_response()
             if self.path == "/api/publisher/status":
                 return self.json_response(200, bridge.status())
             if self.path == "/api/publisher/jobs":
                 with bridge.lock:
                     return self.json_response(200, bridge.batches)
+            if self.path == "/api/catalog/status":
+                return self.json_response(200, analyzer.status())
             return super().do_GET()
+
+        def do_HEAD(self):
+            if urlsplit(self.path).path == "/api/media":
+                return self.media_response(send_body=False)
+            return super().do_HEAD()
 
         def do_POST(self):
             try:
                 if self.path == "/api/publisher/login":
                     return self.json_response(202, bridge.start_login())
-                if self.path != "/api/publisher/publish":
-                    return self.json_response(404, {"error": "Not found"})
                 length = int(self.headers.get("Content-Length", "0"))
                 payload = json.loads(self.rfile.read(length) or b"{}")
-                return self.json_response(202, bridge.enqueue(payload.get("jobs"), payload.get("dispatchMode", "platform")))
+                if self.path == "/api/publisher/publish":
+                    return self.json_response(202, bridge.enqueue(payload.get("jobs"), payload.get("dispatchMode", "platform")))
+                if self.path == "/api/catalog/select-directory":
+                    return self.json_response(200, {"source": analyzer.choose_directory()})
+                if self.path == "/api/catalog/analyze":
+                    return self.json_response(202, analyzer.start(payload.get("source"), payload.get("force") is True))
+                return self.json_response(404, {"error": "Not found"})
             except (ValueError, RuntimeError, json.JSONDecodeError) as error:
+                return self.json_response(400, {"error": str(error)})
+
+        def do_DELETE(self):
+            try:
+                prefix = "/api/publisher/jobs/"
+                if self.path == "/api/publisher/jobs":
+                    return self.json_response(200, bridge.clear_history())
+                if self.path.startswith(prefix):
+                    return self.json_response(200, bridge.clear_history(self.path[len(prefix):]))
+                return self.json_response(404, {"error": "Not found"})
+            except (ValueError, RuntimeError) as error:
                 return self.json_response(400, {"error": str(error)})
 
     return Handler
@@ -394,7 +645,8 @@ def main() -> int:
     if not (directory / "index.html").exists() or not (directory / "results.json").exists():
         parser.error(f"index.html or results.json not found in {directory}")
     bridge = DouyinBrowserBridge(directory, args.douyin_profile_dir.expanduser().resolve())
-    server = http.server.ThreadingHTTPServer((args.host, args.port), make_handler(directory, bridge))
+    analyzer = CatalogAnalysisBridge()
+    server = http.server.ThreadingHTTPServer((args.host, args.port), make_handler(directory, bridge, analyzer))
     host, port = server.server_address
     print(f"http://{host}:{port}/", flush=True)
     try:
