@@ -1,0 +1,75 @@
+.analysis-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  color: #718097;
+  font-size: 11px;
+}
+
+.analysis-current {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #a7b8d2 !important;
+}
+
+.analysis-details {
+  margin: 12px 0;
+}
+
+.analysis-details summary {
+  cursor: pointer;
+  color: #8eb5ff;
+  font-size: 12px;
+  user-select: none;
+}
+
+.analysis-log {
+  margin-top: 9px;
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid #1e2c40;
+  border-radius: 10px;
+  background: #080d16;
+  padding: 7px;
+  font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.analysis-log-line {
+  display: grid;
+  grid-template-columns: 72px 52px minmax(0, 1fr);
+  gap: 8px;
+  padding: 5px 6px;
+  border-bottom: 1px solid #172234;
+  color: #aab8cc;
+  overflow-wrap: anywhere;
+}
+
+.analysis-log-line:last-child {
+  border: 0;
+}
+
+.analysis-log-line time {
+  color: #596a84;
+}
+
+.analysis-stage {
+  color: #78a9ff;
+}
+
+.analysis-log-line.command > span:last-child {
+  color: #82c6f1;
+}
+
+.analysis-log-line.result > span:last-child {
+  color: #78d7b1;
+}
+
+.analysis-log-line.error > span:last-child {
+  color: #ff8fa0;
+}
+
+.analysis-log-empty {
+  padding: 12px;
+  color: #5d6b81;
+}

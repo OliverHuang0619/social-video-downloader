@@ -3,6 +3,7 @@ import { buildFormatArgs, detectPlatform, formatsFromYtDlp, normalizeUrls, sanit
 import { buildOutputTemplate, DownloadQueue, parseDownloadOutput } from '../src/main/queue'
 import { mediaFromGalleryDlLine } from '../src/main/media'
 import { cleanCodexOutput, parseCodexLoginOutput } from '../src/server/codex'
+import { parseCodexProgressLine } from '../src/server/analysis'
 import type { DownloadOptions, MediaItem } from '../src/shared/types'
 
 const options: DownloadOptions = { mode: 'video', quality: '1080', container: 'mp4', audioFormat: 'mp3', audioBitrate: '192', outputRoot: '/tmp', cookieSource: 'none', quickTimeCompatible: true }
@@ -37,6 +38,18 @@ describe('Codex 设备登录输出', () => {
   const raw = '\u001b[90mWelcome to Codex\u001b[0m\nOpen this link:\n\u001b[94mhttps://auth.openai.com/codex/device\u001b[0m\nEnter this one-time code (expires in 15 minutes)\n\u001b[94mA6FG-GHB4U\u001b[0m'
   it('移除终端 ANSI 控制码', () => expect(cleanCodexOutput(raw)).not.toContain('\u001b'))
   it('提取可点击链接和可复制登录码', () => expect(parseCodexLoginOutput(raw)).toMatchObject({ loginUrl: 'https://auth.openai.com/codex/device', loginCode: 'A6FG-GHB4U' }))
+})
+
+describe('Codex 分析进度输出', () => {
+  it('把 JSONL 命令事件转换为可读信息', () => {
+    const result = parseCodexProgressLine(JSON.stringify({ type: 'item.started', item: { type: 'command_execution', command: 'python inspect.py manifest.json' } }))
+    expect(result).toMatchObject({ level: 'command', message: '正在检查证据：python inspect.py manifest.json' })
+  })
+
+  it('显示 token 用量并过滤未知事件', () => {
+    expect(parseCodexProgressLine(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1200, output_tokens: 300 } }))).toMatchObject({ level: 'result', message: 'Codex 分析完成，本轮使用 1,500 tokens' })
+    expect(parseCodexProgressLine(JSON.stringify({ type: 'thread.metadata', value: 1 }))).toBeUndefined()
+  })
 })
 
 describe('下载队列', () => {

@@ -25,7 +25,8 @@ export class AppDatabase {
       );
       CREATE TABLE IF NOT EXISTS analysis_jobs (
         id TEXT PRIMARY KEY, status TEXT NOT NULL, asset_ids TEXT NOT NULL, progress REAL NOT NULL,
-        message TEXT NOT NULL, error TEXT, output_dir TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        message TEXT NOT NULL, error TEXT, output_dir TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        detail_json TEXT NOT NULL DEFAULT '{}'
       );
       CREATE TABLE IF NOT EXISTS publish_batches (
         id TEXT PRIMARY KEY, dispatch_mode TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
@@ -38,6 +39,8 @@ export class AppDatabase {
       CREATE TABLE IF NOT EXISTS download_jobs (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, event TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL);
     `)
+    const analysisColumns = new Set((this.sqlite.prepare('PRAGMA table_info(analysis_jobs)').all() as { name: string }[]).map(column => column.name))
+    if (!analysisColumns.has('detail_json')) this.sqlite.exec("ALTER TABLE analysis_jobs ADD COLUMN detail_json TEXT NOT NULL DEFAULT '{}'")
     this.sqlite.exec("UPDATE analysis_jobs SET status='failed', error='服务重启，原分析任务已中断', updated_at=datetime('now') WHERE status IN ('queued','preparing','analyzing')")
     this.sqlite.exec("UPDATE publish_jobs SET status='interrupted', error='服务曾在发布过程中重启，请先到抖音作品管理确认' WHERE status IN ('launching','uploading','scheduling','submitting')")
     this.sqlite.exec("UPDATE publish_batches SET status='interrupted', updated_at=datetime('now') WHERE status='running'")
@@ -87,16 +90,18 @@ export class AppDatabase {
   saveDownload(job: DownloadJob) { this.sqlite.prepare('INSERT INTO download_jobs(id,payload,updated_at) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at').run(job.id, JSON.stringify(job), new Date().toISOString()) }
   downloads() { return (this.sqlite.prepare('SELECT payload FROM download_jobs ORDER BY updated_at DESC').all() as { payload: string }[]).map(row => JSON.parse(row.payload) as DownloadJob) }
 
-  createAnalysis(job: AnalysisJob, outputDir: string) { this.sqlite.prepare('INSERT INTO analysis_jobs VALUES(?,?,?,?,?,?,?,?,?)').run(job.id, job.status, JSON.stringify(job.assetIds), job.progress, job.message, job.error || null, outputDir, job.createdAt, job.updatedAt) }
-  updateAnalysis(id: string, values: Partial<Pick<AnalysisJob, 'status' | 'progress' | 'message' | 'error'>>) {
+  createAnalysis(job: AnalysisJob, outputDir: string) { this.sqlite.prepare('INSERT INTO analysis_jobs(id,status,asset_ids,progress,message,error,output_dir,created_at,updated_at,detail_json) VALUES(?,?,?,?,?,?,?,?,?,?)').run(job.id, job.status, JSON.stringify(job.assetIds), job.progress, job.message, job.error || null, outputDir, job.createdAt, job.updatedAt, JSON.stringify({ currentItem: job.currentItem, processedItems: job.processedItems, totalItems: job.totalItems, logs: job.logs })) }
+  updateAnalysis(id: string, values: Partial<Pick<AnalysisJob, 'status' | 'progress' | 'message' | 'error' | 'currentItem' | 'processedItems' | 'totalItems' | 'logs'>>) {
     const current = this.analysis(id); if (!current) return
     const next = { ...current, ...values, updatedAt: new Date().toISOString() }
-    this.sqlite.prepare('UPDATE analysis_jobs SET status=?,progress=?,message=?,error=?,updated_at=? WHERE id=?').run(next.status, next.progress, next.message, next.error || null, next.updatedAt, id)
+    this.sqlite.prepare('UPDATE analysis_jobs SET status=?,progress=?,message=?,error=?,detail_json=?,updated_at=? WHERE id=?').run(next.status, next.progress, next.message, next.error || null, JSON.stringify({ currentItem: next.currentItem, processedItems: next.processedItems, totalItems: next.totalItems, logs: next.logs }), next.updatedAt, id)
     return next
   }
   analysis(id: string): AnalysisJob | undefined {
     const row = this.sqlite.prepare('SELECT * FROM analysis_jobs WHERE id=?').get(id) as Record<string, unknown> | undefined
-    return row ? { id: String(row.id), status: row.status as AnalysisJob['status'], assetIds: JSON.parse(String(row.asset_ids)), progress: Number(row.progress), message: String(row.message), error: row.error ? String(row.error) : undefined, createdAt: String(row.created_at), updatedAt: String(row.updated_at) } : undefined
+    if (!row) return undefined
+    const detail = JSON.parse(String(row.detail_json || '{}')) as Partial<Pick<AnalysisJob, 'currentItem' | 'processedItems' | 'totalItems' | 'logs'>>
+    return { id: String(row.id), status: row.status as AnalysisJob['status'], assetIds: JSON.parse(String(row.asset_ids)), progress: Number(row.progress), message: String(row.message), currentItem: detail.currentItem, processedItems: Number(detail.processedItems || 0), totalItems: Number(detail.totalItems || JSON.parse(String(row.asset_ids)).length), logs: Array.isArray(detail.logs) ? detail.logs : [], error: row.error ? String(row.error) : undefined, createdAt: String(row.created_at), updatedAt: String(row.updated_at) }
   }
   analyses() { return (this.sqlite.prepare('SELECT id FROM analysis_jobs ORDER BY created_at DESC').all() as { id: string }[]).map(row => this.analysis(row.id)!) }
 

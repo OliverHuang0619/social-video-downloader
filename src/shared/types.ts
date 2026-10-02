@@ -74,6 +74,13 @@ export interface AnalysisResult {
   evidenceNote: string
 }
 
+export interface AnalysisLogEntry {
+  at: string
+  stage: 'queue' | 'prepare' | 'codex' | 'validate' | 'complete'
+  level: 'info' | 'command' | 'result' | 'error'
+  message: string
+}
+
 export interface MediaAsset {
   id: string
   file: string
@@ -96,6 +103,10 @@ export interface AnalysisJob {
   assetIds: string[]
   progress: number
   message: string
+  currentItem?: string
+  processedItems: number
+  totalItems: number
+  logs: AnalysisLogEntry[]
   error?: string
   createdAt: string
   updatedAt: string

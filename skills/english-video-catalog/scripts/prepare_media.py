@@ -111,6 +111,12 @@ def main() -> int:
     sheets.mkdir(parents=True, exist_ok=True)
     records = []
     for index, video in enumerate(videos, 1):
+        print(json.dumps({
+            "event": "prepare_started",
+            "index": index,
+            "total": len(videos),
+            "filename": video.name,
+        }, ensure_ascii=False), flush=True)
         metadata = probe(video)
         sheet = sheets / f"{index:04d}-{safe_slug(video.stem)}.jpg"
         error = None
@@ -125,6 +131,17 @@ def main() -> int:
             "contact_sheet": str(sheet) if sheet.exists() else None,
             "preparation_note": error,
         })
+        print(json.dumps({
+            "event": "prepare_completed",
+            "index": index,
+            "total": len(videos),
+            "filename": video.name,
+            "duration_seconds": metadata.get("duration_seconds"),
+            "resolution": f"{metadata.get('width')}×{metadata.get('height')}" if metadata.get("width") and metadata.get("height") else None,
+            "sidecar_count": len(records[-1]["sidecar_text"]),
+            "contact_sheet": bool(records[-1]["contact_sheet"]),
+            "error": error or metadata.get("error"),
+        }, ensure_ascii=False), flush=True)
 
     manifest = {
         "source": str(source),

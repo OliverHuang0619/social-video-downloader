@@ -40,6 +40,13 @@ describe('工作台持久化与安全边界', () => {
     expect(db.asset(asset.id)).toMatchObject({ processingState: 'processed', analysis: { englishTitle: 'Asking for Directions' } })
   })
 
+  it('分析任务持久保存逐步执行信息', () => {
+    const now = new Date().toISOString(), asset = db.assets()[0]
+    db.createAnalysis({ id: 'analysis-progress', status: 'preparing', assetIds: [asset.id], progress: 12, message: '正在准备', currentItem: asset.filename, processedItems: 0, totalItems: 1, logs: [{ at: now, stage: 'prepare', level: 'command', message: `正在准备：${asset.filename}` }], createdAt: now, updatedAt: now }, path.join(config, 'analysis-progress'))
+    db.updateAnalysis('analysis-progress', { progress: 30, processedItems: 1, logs: [{ at: now, stage: 'prepare', level: 'result', message: '联系表已生成' }] })
+    expect(db.analysis('analysis-progress')).toMatchObject({ progress: 30, processedItems: 1, totalItems: 1, logs: [{ message: '联系表已生成' }] })
+  })
+
   it('管理员使用 Argon2id 登录且写请求需要 CSRF', async () => {
     const headers = new Map<string, string>()
     const response = { setHeader: (name: string, value: string) => headers.set(name, value) } as unknown as ServerResponse
