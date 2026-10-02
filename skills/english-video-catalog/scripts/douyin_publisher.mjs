@@ -166,11 +166,95 @@ async function waitForUpload(page) {
   throw new Error("等待视频上传完成超时");
 }
 
+function formatLocalDateTime(date) {
+  const pad = value => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function normalizeDateTime(value) {
+  const parts = String(value || "").match(/(\d{4})\D+(\d{1,2})\D+(\d{1,2})\D+(\d{1,2})\D+(\d{1,2})/);
+  if (!parts) return "";
+  const pad = part => String(Number(part)).padStart(2, "0");
+  return `${parts[1]}-${pad(parts[2])}-${pad(parts[3])} ${pad(parts[4])}:${pad(parts[5])}`;
+}
+
+async function selectScheduleDate(page, value) {
+  const panel = page.locator(".semi-datepicker").filter({ visible: true }).last();
+  await panel.waitFor({ state: "visible", timeout: 8000 });
+  const [year, month, day] = value.split("-").map(Number);
+
+  for (let monthOffset = 0; monthOffset < 3; monthOffset += 1) {
+    const ariaTarget = panel.locator(`[role="gridcell"][aria-label="${value}"]`);
+    const panelText = await panel.innerText();
+    const showingTargetMonth = new RegExp(`${year}\\s*年\\s*0?${month}\\s*月`).test(panelText)
+      || new RegExp(`${year}[-/]0?${month}`).test(panelText);
+    const textTarget = panel.locator('[role="gridcell"], [class*="datepicker-day"]')
+      .filter({ hasText: new RegExp(`^${day}$`) });
+    const target = await ariaTarget.count() ? ariaTarget.first() : (showingTargetMonth ? textTarget.first() : null);
+    if (target && await target.count() && await target.isVisible()) {
+      if (await target.getAttribute("aria-disabled") === "true" || (await target.getAttribute("class") || "").includes("disabled")) {
+        throw new Error(`抖音不允许选择日期 ${value}`);
+      }
+      await target.click();
+      await page.waitForTimeout(ACTION_SETTLE_MS);
+      return;
+    }
+    let nextMonth = panel.getByRole("button", { name: "Next month", exact: true });
+    if (!await nextMonth.count()) {
+      const navigationButtons = panel.locator('[class*="datepicker-navigation"] button');
+      nextMonth = navigationButtons.last();
+    }
+    if (!await nextMonth.count()) break;
+    await nextMonth.click();
+    await page.waitForTimeout(ACTION_SETTLE_MS);
+  }
+  throw new Error(`日期选择器中未找到 ${value}`);
+}
+
+async function selectScheduleTime(page, hour, minute) {
+  const panel = page.locator(".semi-datepicker").filter({ visible: true }).last();
+  let switchToTime = panel.getByRole("button", { name: "Switch to time panel", exact: true });
+  if (!await switchToTime.count()) {
+    switchToTime = panel.locator('[class*="datepicker-switch-time"]:not([class*="disabled"])').first();
+  }
+  if (!await switchToTime.count()) throw new Error("日期选择器中未找到时间选择入口");
+  await switchToTime.click();
+  await page.waitForTimeout(ACTION_SETTLE_MS);
+
+  const timePanel = panel.locator('[class*="datepicker-time"]').filter({ visible: true }).last();
+  await timePanel.waitFor({ state: "visible", timeout: 8000 });
+  let lists = timePanel.getByRole("listbox");
+  if (await lists.count() < 2) lists = timePanel.locator("ul");
+  if (await lists.count() < 2) {
+    lists = timePanel.locator('[class*="scrolllist-item"]');
+  }
+  if (await lists.count() < 2) throw new Error("时间选择器未显示小时和分钟列表");
+
+  const selectPart = async (list, value, label) => {
+    let options = list.getByRole("option");
+    if (!await options.count()) options = list.locator("li");
+    const option = options.filter({ hasText: new RegExp(`^0?${Number(value)}(?:时|分)?$`) });
+    if (!await option.count()) throw new Error(`时间选择器中未找到${label} ${value}`);
+    const target = option.first();
+    if (await target.getAttribute("aria-disabled") === "true") {
+      throw new Error(`抖音不允许选择${label} ${value}`);
+    }
+    await target.scrollIntoViewIfNeeded();
+    await target.click();
+    await page.waitForTimeout(ACTION_SETTLE_MS);
+  };
+
+  await selectPart(lists.nth(0), hour, "小时");
+  await selectPart(lists.nth(1), minute, "分钟");
+}
+
 async function setSchedule(page, isoValue) {
   const publishDate = new Date(isoValue);
   if (Number.isNaN(publishDate.getTime())) throw new Error("定时发布时间无效");
-  const pad = value => String(value).padStart(2, "0");
-  const value = `${publishDate.getFullYear()}-${pad(publishDate.getMonth() + 1)}-${pad(publishDate.getDate())} ${pad(publishDate.getHours())}:${pad(publishDate.getMinutes())}`;
+  const value = formatLocalDateTime(publishDate);
+  const dateValue = value.slice(0, 10);
+  const hourValue = value.slice(11, 13);
+  const minuteValue = value.slice(14, 16);
   const schedule = page.locator("[class^='radio']:has-text('定时发布'), label:has-text('定时发布')").first();
   if (!await schedule.count()) throw new Error("未找到“定时发布”选项；该账号可能没有网页定时发布权限");
   await schedule.scrollIntoViewIfNeeded();
@@ -183,15 +267,28 @@ async function setSchedule(page, isoValue) {
     'input[placeholder*="发布时间"]',
   ], 8000);
   if (!timeInput) throw new Error("已选择定时发布，但未找到日期和时间输入框");
-  await fillText(timeInput, value);
-  await timeInput.press("Enter");
+  await timeInput.scrollIntoViewIfNeeded();
+  await timeInput.click();
+  await page.waitForTimeout(ACTION_SETTLE_MS);
+  await selectScheduleDate(page, dateValue);
+  if (!await page.locator(".semi-datepicker").filter({ visible: true }).count()) {
+    await timeInput.click();
+    await page.waitForTimeout(ACTION_SETTLE_MS);
+  }
+  await selectScheduleTime(page, hourValue, minuteValue);
+  await page.keyboard.press("Escape");
   await page.waitForTimeout(500);
   const actual = await timeInput.inputValue().catch(() => "");
-  if (!actual.includes(value.slice(0, 16))) throw new Error(`抖音未接受定时时间 ${value}`);
+  if (normalizeDateTime(actual) !== value) {
+    throw new Error(`抖音未接受定时时间 ${value}（控件实际值：${actual || "空"}）`);
+  }
 }
 
 async function setAigcDeclaration(page) {
+  let modal = null;
   try {
+    const selected = page.getByText("内容由AI生成", { exact: true }).filter({ visible: true });
+    if (await selected.count()) return true;
     const entry = page.getByText("请选择自主声明", { exact: true }).first();
     const fallback = page.getByText("自主声明", { exact: true }).first();
     const target = await entry.count() ? entry : fallback;
@@ -199,16 +296,28 @@ async function setAigcDeclaration(page) {
     await target.scrollIntoViewIfNeeded();
     await target.click();
     await page.waitForTimeout(500);
-    const row = page.locator('label:has-text("内容由AI生成")').first();
-    const text = page.getByText("内容由AI生成", { exact: true }).first();
+    modal = page.locator('[role="modal"], [role="dialog"]').filter({ visible: true }).last();
+    await modal.waitFor({ state: "visible", timeout: 5000 });
+    const row = modal.locator('label:has-text("内容由AI生成")').first();
+    const text = modal.getByText("内容由AI生成", { exact: true }).first();
     const option = await row.count() ? row : text;
     if (!await option.count()) return false;
     await option.click();
-    const confirm = page.getByRole("button", { name: "确定", exact: true }).last();
-    if (await confirm.count()) await confirm.click();
+    await page.waitForTimeout(ACTION_SETTLE_MS);
+    const confirm = modal.getByRole("button", { name: "确定", exact: true }).last();
+    if (!await confirm.count()) return false;
+    await confirm.click();
+    await modal.waitFor({ state: "hidden", timeout: 5000 });
     return true;
   } catch {
     return false;
+  } finally {
+    if (modal && await modal.isVisible().catch(() => false)) {
+      const cancel = modal.getByRole("button", { name: "取消", exact: true }).last();
+      if (await cancel.count()) await cancel.click().catch(() => {});
+      else await page.keyboard.press("Escape").catch(() => {});
+      await page.waitForTimeout(ACTION_SETTLE_MS).catch(() => {});
+    }
   }
 }
 
