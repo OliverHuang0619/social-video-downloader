@@ -14,15 +14,26 @@
 
 ## Docker Compose 部署
 
-要求 Docker 及 Compose v2。首次部署先创建持久目录和两个 secret：
+要求 Docker 及 Compose v2。推荐使用快捷脚本；首次运行会创建持久目录，并交互设置管理员密码和生成 session secret：
 
 ```bash
-mkdir -p downloads imports config
-printf '%s' '替换为强管理员密码' > config/admin_password
-openssl rand -hex 32 > config/session_secret
-chmod 600 config/admin_password config/session_secret
-docker compose up -d --build
+./deploy.sh deploy
 ```
+
+拉取基础镜像、清除构建缓存并重新部署（不会删除 `downloads`、`imports` 或 `config`）：
+
+```bash
+./deploy.sh redeploy
+```
+
+查看状态与日志：
+
+```bash
+./deploy.sh status
+./deploy.sh logs
+```
+
+非交互式首次部署可通过 `SVD_ADMIN_PASSWORD='强管理员密码' ./deploy.sh deploy` 提供密码。脚本会等待 App 与 Browser 健康检查，启动失败时输出相关容器日志。直接使用 Compose 仍然受支持。
 
 默认只监听 `127.0.0.1:3000`。打开 <http://127.0.0.1:3000>，用 `config/admin_password` 中的密码登录。
 
