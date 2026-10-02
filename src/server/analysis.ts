@@ -82,6 +82,15 @@ export class AnalysisService {
   }
   cancel(id: string) { if (this.active?.id !== id) throw new Error('任务未在运行'); this.active.child?.kill('SIGTERM'); this.addLog(id, 'complete', 'info', '用户取消了分析任务', { status: 'cancelled', message: '已取消分析', currentItem: undefined }); this.active = undefined }
   retry(id: string) { const old = this.db.analysis(id); if (!old || !['failed', 'cancelled'].includes(old.status)) throw new Error('该任务不能重试'); return this.start(old.assetIds, true, this.db.analysisOutputDir(id)) }
+  delete(id: string) {
+    if (!this.db.analysis(id)) throw new Error('分析任务不存在')
+    if (!this.db.deleteAnalysis(id)) throw new Error('运行中的分析任务不能删除')
+    this.db.audit('analysis.deleted', { id }); this.changed()
+  }
+  clearHistory() {
+    const count = this.db.clearAnalysisHistory()
+    this.db.audit('analysis.history_cleared', { count }); this.changed(); return count
+  }
   private update(id: string, values: Parameters<AppDatabase['updateAnalysis']>[1]) { this.db.updateAnalysis(id, values); this.changed() }
   private addLog(id: string, stage: AnalysisLogEntry['stage'], level: AnalysisLogEntry['level'], message: string, values: Parameters<AppDatabase['updateAnalysis']>[1] = {}) {
     const job = this.db.analysis(id); if (!job) return

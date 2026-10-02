@@ -114,12 +114,16 @@ export class PublisherService {
     let succeeded = false
     await this.execute(['publish', payloadPath], event => {
       const name = String(event.event)
-      if (['launching', 'uploading', 'scheduling', 'submitting', 'published', 'scheduled'].includes(name)) { this.db.updatePublishJob(job.id, name as PublishJob['status'], { screenshot: event.screenshot ? String(event.screenshot) : undefined }); succeeded = name === 'published' || name === 'scheduled' }
+      if (['launching', 'uploading', 'scheduling', 'submitting', 'published', 'scheduled'].includes(name)) {
+        this.db.updatePublishJob(job.id, name as PublishJob['status'], { screenshot: event.screenshot ? String(event.screenshot) : undefined })
+        succeeded = name === 'published' || name === 'scheduled'
+        if (succeeded) this.db.setAssetState(job.assetId, 'processed')
+      }
       if (name === 'error') { const message = String(event.message || '发布失败'); const status = message.includes('LOGIN_REQUIRED') ? 'needs_login' : message.includes('MANUAL_REVIEW_REQUIRED') ? 'needs_attention' : 'failed'; this.db.updatePublishJob(job.id, status, { error: message, screenshot: event.screenshot ? String(event.screenshot) : undefined }); this.loginStatus = status === 'needs_login' ? 'needs_login' : status === 'needs_attention' ? 'needs_attention' : this.loginStatus; this.message = message }
       this.changed()
     })
     await unlink(payloadPath).catch(() => undefined)
-    if (succeeded) { this.db.setAssetState(job.assetId, 'processed'); this.loginStatus = 'ready'; this.message = '抖音发布服务已就绪' }
+    if (succeeded) { this.loginStatus = 'ready'; this.message = '抖音发布服务已就绪'; this.changed() }
     return succeeded
   }
   private execute(args: string[], onEvent: (event: Record<string, unknown>) => void) {

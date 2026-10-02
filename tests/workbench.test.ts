@@ -68,4 +68,48 @@ describe('工作台持久化与安全边界', () => {
     db.updatePublishJob('batch-active-001', 'published'); db.updatePublishBatch('batch-active', 'completed')
     expect(db.deletePublishBatch('batch-active')).toBe(true)
   })
+
+  it('抖音发布成功时立即把媒体标记为已处理', async () => {
+    const skill = path.join(root, 'publisher-skill'), scripts = path.join(skill, 'scripts')
+    mkdirSync(scripts, { recursive: true })
+    writeFileSync(path.join(scripts, 'douyin_publisher.mjs'), `process.stdout.write(JSON.stringify({event:'published'})+'\\n')`)
+    process.env.SVD_SKILL_DIR = skill
+    process.env.SVD_PUBLISH_COOLDOWN_MS = '0'
+    const { PublisherService } = await import('../src/server/publisher')
+    const asset = db.assets()[0]
+    db.setAssetState(asset.id, 'unprocessed')
+    let changes = 0
+    const publisher = new PublisherService(db, () => { changes += 1 })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const batch = publisher.create([{ assetId: asset.id, title: 'Directions', topics: ['English'] }], 'platform')
+    for (let index = 0; index < 50 && db.publishBatches().find(value => value.id === batch.id)?.status !== 'completed'; index += 1) await new Promise(resolve => setTimeout(resolve, 20))
+    expect(db.publishBatches().find(value => value.id === batch.id)?.status).toBe('completed')
+    expect(db.asset(asset.id)?.processingState).toBe('processed')
+    expect(changes).toBeGreaterThan(1)
+  })
+
+  it('启动时对账已发布历史与媒体处理状态', async () => {
+    const asset = db.assets()[0], now = new Date().toISOString()
+    db.setAssetState(asset.id, 'unprocessed')
+    db.createPublishBatch({ id: 'batch-reconcile', dispatchMode: 'platform', status: 'interrupted', createdAt: now, updatedAt: now, jobs: [{ id: 'batch-reconcile-001', batchId: 'batch-reconcile', assetId: asset.id, title: 'Directions', topics: ['English'], aigc: true, status: 'published' }] })
+    const { AppDatabase } = await import('../src/server/db')
+    const reopened = new AppDatabase()
+    expect(reopened.asset(asset.id)?.processingState).toBe('processed')
+    expect(reopened.publishBatches().find(value => value.id === 'batch-reconcile')?.status).toBe('completed')
+  })
+
+  it('分析历史可单个删除或全部清除，但保留运行中任务', () => {
+    const now = new Date().toISOString(), asset = db.assets()[0]
+    const create = (id: string, status: 'queued' | 'completed' | 'failed') => db.createAnalysis({ id, status, assetIds: [asset.id], progress: status === 'completed' ? 100 : 0, message: id, processedItems: 0, totalItems: 1, logs: [], createdAt: now, updatedAt: now }, path.join(config, id))
+    create('analysis-delete-one', 'completed')
+    create('analysis-keep-active', 'queued')
+    expect(db.deleteAnalysis('analysis-keep-active')).toBe(false)
+    expect(db.deleteAnalysis('analysis-delete-one')).toBe(true)
+    expect(db.analysis('analysis-delete-one')).toBeUndefined()
+    create('analysis-clear-failed', 'failed')
+    const terminalCount = db.analyses().filter(job => !['queued', 'preparing', 'analyzing'].includes(job.status)).length
+    expect(db.clearAnalysisHistory()).toBe(terminalCount)
+    expect(db.analysis('analysis-keep-active')).toBeTruthy()
+    expect(db.analyses().every(job => ['queued', 'preparing', 'analyzing'].includes(job.status))).toBe(true)
+  })
 })

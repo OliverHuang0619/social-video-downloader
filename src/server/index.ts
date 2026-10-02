@@ -71,8 +71,10 @@ async function api(request: IncomingMessage, response: ServerResponse, url: URL)
   const mediaMatch = request.method === 'GET' && pathname.match(/^\/api\/library\/([^/]+)\/(media|file)$/); if (mediaMatch) return library.stream(mediaMatch[1], request.headers.range, response, mediaMatch[2] === 'file')
   if (request.method === 'GET' && pathname === '/api/analysis/jobs') return json(response, 200, db.analyses())
   if (request.method === 'POST' && pathname === '/api/analysis/jobs') { const value = await body<{ assetIds: string[]; force?: boolean }>(request); return json(response, 202, analysis.start(value.assetIds, value.force)) }
+  if (request.method === 'DELETE' && pathname === '/api/analysis/jobs') return json(response, 200, { count: analysis.clearHistory() })
   const analysisCancel = request.method === 'POST' && pathname.match(/^\/api\/analysis\/jobs\/([^/]+)\/cancel$/); if (analysisCancel) { analysis.cancel(analysisCancel[1]); return json(response, 200, null) }
   const analysisRetry = request.method === 'POST' && pathname.match(/^\/api\/analysis\/jobs\/([^/]+)\/retry$/); if (analysisRetry) return json(response, 202, analysis.retry(analysisRetry[1]))
+  const analysisDelete = request.method === 'DELETE' && pathname.match(/^\/api\/analysis\/jobs\/([^/]+)$/); if (analysisDelete) { analysis.delete(analysisDelete[1]); return json(response, 200, null) }
   if (request.method === 'GET' && pathname === '/api/codex/status') return json(response, 200, await codex.status())
   if (request.method === 'POST' && pathname === '/api/codex/login') { codex.login(); return json(response, 202, await codex.status()) }
   if (request.method === 'POST' && pathname === '/api/codex/login/cancel') { codex.cancelLogin(); return json(response, 200, await codex.status()) }

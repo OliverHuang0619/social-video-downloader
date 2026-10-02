@@ -44,6 +44,8 @@ export class AppDatabase {
     this.sqlite.exec("UPDATE analysis_jobs SET status='failed', error='服务重启，原分析任务已中断', updated_at=datetime('now') WHERE status IN ('queued','preparing','analyzing')")
     this.sqlite.exec("UPDATE publish_jobs SET status='interrupted', error='服务曾在发布过程中重启，请先到抖音作品管理确认' WHERE status IN ('launching','uploading','scheduling','submitting')")
     this.sqlite.exec("UPDATE publish_batches SET status='interrupted', updated_at=datetime('now') WHERE status='running'")
+    this.sqlite.exec("UPDATE media_assets SET processing_state='processed', updated_at=datetime('now') WHERE id IN (SELECT asset_id FROM publish_jobs WHERE status IN ('published','scheduled'))")
+    this.sqlite.exec("UPDATE publish_batches SET status='completed', updated_at=datetime('now') WHERE status='interrupted' AND EXISTS (SELECT 1 FROM publish_jobs WHERE batch_id=publish_batches.id) AND NOT EXISTS (SELECT 1 FROM publish_jobs WHERE batch_id=publish_batches.id AND status NOT IN ('published','scheduled'))")
     this.sqlite.exec("DELETE FROM sessions WHERE expires_at <= datetime('now')")
     const interruptedDownloads = this.sqlite.prepare('SELECT id,payload FROM download_jobs').all() as { id: string; payload: string }[]
     for (const row of interruptedDownloads) {
@@ -105,6 +107,8 @@ export class AppDatabase {
   }
   analysisOutputDir(id: string) { return (this.sqlite.prepare('SELECT output_dir FROM analysis_jobs WHERE id=?').get(id) as { output_dir: string } | undefined)?.output_dir }
   analyses() { return (this.sqlite.prepare('SELECT id FROM analysis_jobs ORDER BY created_at DESC').all() as { id: string }[]).map(row => this.analysis(row.id)!) }
+  deleteAnalysis(id: string) { return this.sqlite.prepare("DELETE FROM analysis_jobs WHERE id=? AND status NOT IN ('queued','preparing','analyzing')").run(id).changes > 0 }
+  clearAnalysisHistory() { return this.sqlite.prepare("DELETE FROM analysis_jobs WHERE status NOT IN ('queued','preparing','analyzing')").run().changes }
 
   createPublishBatch(batch: PublishBatch) {
     this.sqlite.exec('BEGIN')

@@ -26,7 +26,13 @@ function readPayload() {
 
 async function launch() {
   if (cdpUrl) {
-    const browser = await chromium.connectOverCDP(cdpUrl, cdpToken ? { headers: { authorization: `Bearer ${cdpToken}` } } : undefined);
+    const browser = await chromium.connectOverCDP(cdpUrl, {
+      ...(cdpToken ? { headers: { authorization: `Bearer ${cdpToken}` } } : {}),
+      // This is a user-owned persistent Chrome profile. Keep its browser defaults so
+      // Playwright does not issue Browser.setDownloadBehavior, which is unsupported
+      // by some host Chrome/default-context combinations and is unnecessary here.
+      noDefaults: true,
+    });
     const context = browser.contexts()[0];
     if (!context) throw new Error("远程 Chromium 未提供持久浏览器上下文");
     return { context, remote: true };

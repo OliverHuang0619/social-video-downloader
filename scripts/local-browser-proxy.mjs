@@ -23,8 +23,9 @@ function reject(socketOrResponse) {
 
 const server = http.createServer((request, response) => {
   if (!authorized(request)) return reject(response);
-  const requestHeaders = { ...request.headers, host: `127.0.0.1:${chromePort}` };
-  delete requestHeaders.authorization;
+  const requestHeaders = Object.fromEntries(Object.entries(request.headers)
+    .filter(([name, value]) => name.toLowerCase() !== "authorization" && value !== undefined));
+  requestHeaders.host = `127.0.0.1:${chromePort}`;
   const upstream = http.request({ hostname: "127.0.0.1", port: chromePort, path: request.url, method: request.method, headers: requestHeaders }, upstreamResponse => {
     const chunks = [];
     upstreamResponse.on("data", chunk => chunks.push(chunk));
@@ -46,7 +47,7 @@ server.on("upgrade", (request, socket, head) => {
   if (!authorized(request)) return reject(socket);
   const upstream = net.connect(chromePort, "127.0.0.1", () => {
     const headers = Object.entries(request.headers)
-      .filter(([name]) => name.toLowerCase() !== "authorization")
+      .filter(([name, value]) => name.toLowerCase() !== "authorization" && value !== undefined)
       .map(([name, value]) => `${name}: ${Array.isArray(value) ? value.join(", ") : value}`);
     const hostIndex = headers.findIndex(line => line.toLowerCase().startsWith("host:"));
     const host = `Host: 127.0.0.1:${chromePort}`;
