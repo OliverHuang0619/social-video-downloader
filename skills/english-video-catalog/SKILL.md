@@ -25,7 +25,7 @@ Do not move, rename, or modify source videos unless the user separately requests
 4. If speech is important but no transcript backend exists, do not install software or use a paid API without authorization. Continue from visual/filename evidence when adequate, lower confidence, and state the limitation. Never invent spoken details.
 5. For a directory, inspect a representative spread before choosing categories. Prefer 5–12 stable, mutually understandable categories; use `Other` only for true outliers. Classification means labeling in the report, not changing filesystem layout.
 6. Write `OUTPUT/results.json` using the schema below, then run `scripts/build_report.py OUTPUT/results.json --output OUTPUT/index.html`.
-7. Start `scripts/serve_report.py OUTPUT` and open the printed localhost URL in the local browser. Keep the server running long enough for the user to view and copy results. If browser opening is unavailable, provide a clickable absolute path to `index.html`.
+7. Start `scripts/serve_report.py OUTPUT` and open the printed localhost URL in the local browser. Keep the server running long enough for the user to view, track, filter, and copy results. If browser opening is unavailable, provide a clickable absolute path to `index.html`.
 
 For large directories, process in batches if needed, but do not silently omit files. Compare result count and paths against `manifest.json` before reporting completion.
 
@@ -71,8 +71,19 @@ Match the user's language for titles, categories, topics, and summaries; default
 
 Every `file` must be the absolute path from the manifest. Keep JSON factual and free of HTML; the renderer handles escaping and layout.
 
+## Report interaction requirements
+
+The HTML report must:
+
+- include the original video filename in search and show it on each card;
+- default every video to `未处理`, allow toggling it to `已处理`, persist this state in browser `localStorage`, and filter by `未处理` (the default view), `已处理`, or all states;
+- ensure nonmatching cards are actually hidden in the rendered layout, so the visible cards always agree with the filtered count;
+- retain title/category/topic/summary search and category filtering;
+- provide separate copy buttons for the Chinese title, English title, key topics, and summary, plus a whole-card copy action;
+- use an explicit `搜索` button to apply keyword search, and apply the same search when Enter is pressed in the search field. Keep category and processing-status filters immediate.
+
 ## Scripts
 
 - `scripts/prepare_media.py`: inventory, metadata, subtitle discovery, and contact sheets.
-- `scripts/build_report.py`: validate result shape/title length and render a searchable, filterable, copy-friendly HTML page.
+- `scripts/build_report.py`: validate result shape/title length and render a searchable, stateful, filterable, copy-friendly HTML page.
 - `scripts/serve_report.py`: serve the report on localhost and print its URL.
