@@ -73,3 +73,66 @@
   padding: 12px;
   color: #5d6b81;
 }
+
+.codex-settings {
+  grid-column: span 2;
+}
+
+.codex-runtime {
+  display: grid;
+  gap: 12px;
+  margin: 14px 0;
+}
+
+.codex-runtime-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.codex-runtime-grid > div,
+.codex-usage {
+  border: 1px solid #26364d;
+  border-radius: 10px;
+  background: #080d16;
+  padding: 10px 12px;
+}
+
+.codex-runtime-grid span,
+.codex-usage span,
+.codex-usage small {
+  color: #718097;
+  font-size: 11px;
+}
+
+.codex-runtime-grid strong {
+  display: block;
+  margin-top: 4px;
+  color: #dce8ff;
+  font-size: 13px;
+}
+
+.codex-usage-bar {
+  height: 7px;
+  margin: 9px 0 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #1a2433;
+}
+
+.codex-usage-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #36c7ed, #6977ff);
+}
+
+@media (max-width: 900px) {
+  .codex-settings {
+    grid-column: auto;
+  }
+
+  .codex-runtime-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -136,7 +136,9 @@ export interface PublishBatch {
 }
 
 export interface AuthStatus { authenticated: boolean; csrfToken?: string }
-export interface CodexStatus { available: boolean; authenticated: boolean; busy: boolean; message: string; loginOutput?: string; loginUrl?: string; loginCode?: string }
+export interface CodexUsageWindow { usedPercent: number; remainingPercent: number; windowDurationMins?: number; resetsAt?: number }
+export interface CodexUsageStatus { planType?: string; ordinaryUsageAllowed?: boolean; limits: Array<{ id: string; name?: string; primary?: CodexUsageWindow; secondary?: CodexUsageWindow }> }
+export interface CodexStatus { available: boolean; authenticated: boolean; busy: boolean; message: string; model: string; reasoningEffort: string; usage?: CodexUsageStatus; usageUnavailable?: boolean; loginOutput?: string; loginUrl?: string; loginCode?: string }
 export interface BrowserStatus { ready: boolean; mode: 'container' | 'host'; loginStatus: 'unknown' | 'ready' | 'needs_login' | 'needs_attention'; message: string; remoteUrl: string; manageUrl: string }
 
 export interface ToolInfo { name: 'yt-dlp' | 'gallery-dl' | 'ffmpeg'; available: boolean; path?: string; version?: string; managed: boolean; error?: string }

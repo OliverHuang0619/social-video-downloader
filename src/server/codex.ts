@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import type { CodexStatus } from '../shared/types'
+import type { CodexStatus, CodexUsageStatus, CodexUsageWindow } from '../shared/types'
 
 export const DEFAULT_CODEX_MODEL = 'gpt-5.6-sol'
 export const DEFAULT_CODEX_REASONING_EFFORT = 'medium'
@@ -39,12 +39,56 @@ function run(command: string, args: string[], environment: NodeJS.ProcessEnv, ti
   })
 }
 
+type RateLimitWindow = { usedPercent?: unknown; windowDurationMins?: unknown; resetsAt?: unknown }
+type RateLimitSnapshot = { limitId?: unknown; limitName?: unknown; planType?: unknown; primary?: RateLimitWindow | null; secondary?: RateLimitWindow | null }
+
+function usageWindow(value?: RateLimitWindow | null): CodexUsageWindow | undefined {
+  if (!value || !Number.isFinite(Number(value.usedPercent))) return undefined
+  const usedPercent = Math.min(100, Math.max(0, Math.round(Number(value.usedPercent))))
+  return { usedPercent, remainingPercent: 100 - usedPercent, windowDurationMins: Number.isFinite(Number(value.windowDurationMins)) ? Number(value.windowDurationMins) : undefined, resetsAt: Number.isFinite(Number(value.resetsAt)) ? Number(value.resetsAt) : undefined }
+}
+
+export function parseCodexRateLimits(value: unknown): CodexUsageStatus | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const response = value as { ordinaryUsageAllowed?: unknown; rateLimits?: RateLimitSnapshot; rateLimitsByLimitId?: Record<string, RateLimitSnapshot> | null }
+  const entries = response.rateLimitsByLimitId && Object.keys(response.rateLimitsByLimitId).length ? Object.entries(response.rateLimitsByLimitId) : response.rateLimits ? [[String(response.rateLimits.limitId || 'codex'), response.rateLimits] as const] : []
+  const limits = entries.map(([key, limit]) => ({ id: String(limit.limitId || key), name: limit.limitName ? String(limit.limitName) : undefined, primary: usageWindow(limit.primary), secondary: usageWindow(limit.secondary) }))
+  if (!limits.length) return undefined
+  const planType = (entries[0]?.[1] as RateLimitSnapshot | undefined)?.planType
+  return { planType: planType ? String(planType) : undefined, ordinaryUsageAllowed: typeof response.ordinaryUsageAllowed === 'boolean' ? response.ordinaryUsageAllowed : undefined, limits }
+}
+
+function readCodexRateLimits(command: string, environment: NodeJS.ProcessEnv, timeout = 15_000) {
+  return new Promise<CodexUsageStatus | undefined>((resolve) => {
+    const child = spawn(command, ['app-server', '--listen', 'stdio://'], { env: environment, windowsHide: true })
+    let buffer = '', settled = false
+    const finish = (value?: CodexUsageStatus) => { if (settled) return; settled = true; clearTimeout(timer); child.stdin.end(); child.kill('SIGTERM'); resolve(value) }
+    const timer = setTimeout(() => finish(), timeout)
+    child.on('error', () => finish()); child.on('close', () => finish())
+    child.stderr.on('data', () => undefined)
+    child.stdout.on('data', chunk => {
+      buffer += chunk.toString(); const lines = buffer.split(/\r?\n/); buffer = lines.pop() || ''
+      for (const line of lines) {
+        let message: { id?: number; result?: unknown; error?: unknown }
+        try { message = JSON.parse(line) as typeof message } catch { continue }
+        if (message.id === 1 && message.result) {
+          child.stdin.write(`${JSON.stringify({ method: 'initialized' })}\n`)
+          child.stdin.write(`${JSON.stringify({ id: 2, method: 'account/rateLimits/read', params: { excludeResetCreditDetails: true } })}\n`)
+        }
+        if (message.id === 2) finish(message.error ? undefined : parseCodexRateLimits(message.result))
+      }
+    })
+    child.stdin.write(`${JSON.stringify({ id: 1, method: 'initialize', params: { clientInfo: { name: 'social-video-workbench', title: 'Social Video Workbench', version: '1.1.0' }, capabilities: { experimentalApi: true } } })}\n`)
+  })
+}
+
 export class CodexService {
   readonly command = process.env.SVD_CODEX_BIN || 'codex'
   readonly home = path.join(process.env.SVD_CONFIG_DIR || '/config', 'codex-home')
   readonly analysisConfig = resolveCodexAnalysisConfig()
   private loginProcess?: ChildProcessWithoutNullStreams
   private loginOutput = ''
+  private usageCache?: { expiresAt: number; value?: CodexUsageStatus }
   constructor(private changed: () => void) {}
   environment() { return { ...process.env, HOME: this.home, CODEX_HOME: path.join(this.home, '.codex') } }
   analysisArguments(outputDirectory: string, prompt: string) {
@@ -57,11 +101,17 @@ export class CodexService {
     if (!current.includes('cli_auth_credentials_store')) await writeFile(config, `${current}${current && !current.endsWith('\n') ? '\n' : ''}cli_auth_credentials_store = "file"\n`)
   }
   async status(): Promise<CodexStatus> {
-    const version = await run(this.command, ['--version'], this.environment())
-    if (version.code !== 0) return { available: false, authenticated: false, busy: Boolean(this.loginProcess), message: '未找到可用的 Codex CLI' }
-    const login = await run(this.command, ['login', 'status'], this.environment())
+    const environment = this.environment()
+    const [version, login] = await Promise.all([run(this.command, ['--version'], environment), run(this.command, ['login', 'status'], environment)])
+    const base = { model: this.analysisConfig.model, reasoningEffort: this.analysisConfig.reasoningEffort }
+    if (version.code !== 0) return { ...base, available: false, authenticated: false, busy: Boolean(this.loginProcess), message: '未找到可用的 Codex CLI' }
     const loginDetails = parseCodexLoginOutput(this.loginOutput)
-    return { available: true, authenticated: login.code === 0, busy: Boolean(this.loginProcess), message: login.code === 0 ? cleanCodexOutput(login.output) || 'Codex 已登录' : 'Codex 尚未登录', loginOutput: loginDetails.output || undefined, loginUrl: loginDetails.loginUrl, loginCode: loginDetails.loginCode }
+    let usage: CodexUsageStatus | undefined
+    if (login.code === 0) {
+      if (!this.usageCache || this.usageCache.expiresAt <= Date.now()) this.usageCache = { value: await readCodexRateLimits(this.command, environment), expiresAt: Date.now() + 60_000 }
+      usage = this.usageCache.value
+    }
+    return { ...base, available: true, authenticated: login.code === 0, busy: Boolean(this.loginProcess), message: login.code === 0 ? cleanCodexOutput(login.output) || 'Codex 已登录' : 'Codex 尚未登录', usage, usageUnavailable: login.code === 0 && !usage, loginOutput: loginDetails.output || undefined, loginUrl: loginDetails.loginUrl, loginCode: loginDetails.loginCode }
   }
   login() {
     if (this.loginProcess) return
@@ -75,5 +125,5 @@ export class CodexService {
     this.changed()
   }
   cancelLogin() { this.loginProcess?.kill('SIGTERM'); this.loginProcess = undefined; this.changed() }
-  async logout() { this.cancelLogin(); await run(this.command, ['logout'], this.environment()); this.loginOutput = ''; this.changed() }
+  async logout() { this.cancelLogin(); await run(this.command, ['logout'], this.environment()); this.loginOutput = ''; this.usageCache = undefined; this.changed() }
 }
