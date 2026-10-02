@@ -3,6 +3,9 @@ export type MediaKind = 'video' | 'audio'
 export type JobStatus = 'queued' | 'downloading' | 'completed' | 'skipped' | 'failed' | 'cancelled'
 export type CookieSource = 'none' | 'file'
 export type MediaFormatKind = 'video-audio' | 'video-only' | 'audio-only'
+export type ProcessingState = 'unprocessed' | 'processed'
+export type AnalysisJobStatus = 'queued' | 'preparing' | 'analyzing' | 'completed' | 'failed' | 'cancelled'
+export type PublishJobStatus = 'queued' | 'waiting_local' | 'launching' | 'uploading' | 'scheduling' | 'submitting' | 'published' | 'scheduled' | 'failed' | 'needs_login' | 'needs_attention' | 'interrupted'
 
 export interface MediaFormat {
   id: string
@@ -58,7 +61,72 @@ export interface DownloadJob {
   error?: string
   outputPath?: string
   attempts: number
+  assetId?: string
 }
+
+export interface AnalysisResult {
+  title: string
+  englishTitle: string
+  category: string
+  keyTopics: string[]
+  summary: string
+  confidence: 'high' | 'medium' | 'low'
+  evidenceNote: string
+}
+
+export interface MediaAsset {
+  id: string
+  file: string
+  filename: string
+  sourceUrl?: string
+  platform?: Platform
+  uploader?: string
+  duration?: number
+  thumbnail?: string
+  publishedAt?: string
+  processingState: ProcessingState
+  analysis?: AnalysisResult
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AnalysisJob {
+  id: string
+  status: AnalysisJobStatus
+  assetIds: string[]
+  progress: number
+  message: string
+  error?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface PublishJob {
+  id: string
+  batchId: string
+  assetId: string
+  title: string
+  topics: string[]
+  publishAt?: string
+  executeAt?: string
+  aigc: boolean
+  status: PublishJobStatus
+  error?: string
+  screenshot?: string
+}
+
+export interface PublishBatch {
+  id: string
+  dispatchMode: 'platform' | 'local'
+  status: 'queued' | 'waiting_local' | 'running' | 'completed' | 'partial' | 'failed' | 'needs_attention' | 'interrupted'
+  createdAt: string
+  updatedAt: string
+  jobs: PublishJob[]
+}
+
+export interface AuthStatus { authenticated: boolean; csrfToken?: string }
+export interface CodexStatus { available: boolean; authenticated: boolean; busy: boolean; message: string; loginOutput?: string }
+export interface BrowserStatus { ready: boolean; loginStatus: 'unknown' | 'ready' | 'needs_login' | 'needs_attention'; message: string; remoteUrl: string; manageUrl: string }
 
 export interface ToolInfo { name: 'yt-dlp' | 'gallery-dl' | 'ffmpeg'; available: boolean; path?: string; version?: string; managed: boolean; error?: string }
 export interface ToolStatus { ready: boolean; tools: ToolInfo[] }

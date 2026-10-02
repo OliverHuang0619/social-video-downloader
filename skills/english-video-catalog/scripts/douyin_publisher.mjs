@@ -10,6 +10,7 @@ const MANAGE_URL = "https://creator.douyin.com/creator-micro/content/manage";
 const command = process.argv[2] || "";
 const payloadPath = process.argv[3] || "";
 const profileDir = process.env.DOUYIN_PROFILE_DIR || path.join(process.env.HOME || ".", ".config", "english-video-catalog", "douyin-profile");
+const cdpUrl = process.env.DOUYIN_CDP_URL || "";
 const TYPE_DELAY_MS = 35;
 const ACTION_SETTLE_MS = 350;
 
@@ -23,6 +24,12 @@ function readPayload() {
 }
 
 async function launch() {
+  if (cdpUrl) {
+    const browser = await chromium.connectOverCDP(cdpUrl);
+    const context = browser.contexts()[0];
+    if (!context) throw new Error("远程 Chromium 未提供持久浏览器上下文");
+    return { context, remote: true };
+  }
   fs.mkdirSync(profileDir, { recursive: true, mode: 0o700 });
   const context = await chromium.launchPersistentContext(profileDir, {
     channel: "chrome",
@@ -30,7 +37,7 @@ async function launch() {
     viewport: { width: 1440, height: 960 },
     args: ["--start-maximized"],
   });
-  return context;
+  return { context, remote: false };
 }
 
 async function ensureNoVerificationChallenge(page) {
@@ -91,13 +98,14 @@ async function ensureUploadInput(page, timeout = 90000) {
 }
 
 async function login() {
-  const context = await launch();
-  const page = context.pages()[0] || await context.newPage();
+  const { context, remote } = await launch();
+  const page = await context.newPage();
   emit("login_opened", { url: UPLOAD_URL });
   await page.goto(UPLOAD_URL, { waitUntil: "domcontentloaded", timeout: 90000 });
   if (await hasDouyinSession(context)) {
     emit("login_ready");
-    await context.close();
+    await page.close();
+    if (!remote) await context.close();
     return;
   }
   if (!await hasUploadInput(page, 3000)) {
@@ -109,13 +117,15 @@ async function login() {
     if (await hasDouyinSession(context) || await hasUploadInput(page, 2000)) {
       emit("login_ready");
       await page.waitForTimeout(1500);
-      await context.close();
+      await page.close();
+      if (!remote) await context.close();
       return;
     }
     if (page.isClosed()) throw new Error("登录窗口已关闭，但尚未检测到登录成功");
     await page.waitForTimeout(1500);
   }
-  await context.close();
+  await page.close();
+  if (!remote) await context.close();
   throw new Error("等待扫码登录超时，请重新打开登录窗口");
 }
 
@@ -326,8 +336,8 @@ async function publish() {
   const artifactDir = path.resolve(job.artifactDir || ".");
   fs.mkdirSync(artifactDir, { recursive: true });
   const screenshot = path.join(artifactDir, `${job.jobId || "douyin"}.png`);
-  const context = await launch();
-  const page = context.pages()[0] || await context.newPage();
+  const { context, remote } = await launch();
+  const page = await context.newPage();
   try {
     emit("launching");
     await page.goto(UPLOAD_URL, { waitUntil: "domcontentloaded", timeout: 90000 });
@@ -383,7 +393,8 @@ async function publish() {
     process.exitCode = 1;
   } finally {
     await page.waitForTimeout(1200).catch(() => {});
-    await context.close().catch(() => {});
+    await page.close().catch(() => {});
+    if (!remote) await context.close().catch(() => {});
   }
 }
 

@@ -71,6 +71,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("input", type=Path, help="Video file or directory")
     parser.add_argument("--output", required=True, type=Path, help="Report working directory")
+    parser.add_argument("--files-json", type=Path, help="Optional JSON array of exact video paths to prepare")
     parser.add_argument("--no-contact-sheets", action="store_true")
     args = parser.parse_args()
 
@@ -83,7 +84,18 @@ def main() -> int:
     if not args.no_contact_sheets and shutil.which("ffmpeg") is None:
         parser.error("ffmpeg is required unless --no-contact-sheets is used")
 
-    if source.is_file():
+    if args.files_json:
+        try:
+            requested = json.loads(args.files_json.expanduser().resolve().read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            parser.error(f"cannot read --files-json: {exc}")
+        if not isinstance(requested, list) or not requested:
+            parser.error("--files-json must contain a non-empty array")
+        videos = [Path(value).expanduser().resolve() for value in requested]
+        if any(not video.is_file() or video.suffix.lower() not in VIDEO_EXTS for video in videos):
+            parser.error("--files-json contains a missing or unsupported video")
+        mode = "directory" if len(videos) > 1 else "single"
+    elif source.is_file():
         videos = [source] if source.suffix.lower() in VIDEO_EXTS else []
         mode = "single"
     else:
