@@ -3,6 +3,7 @@ import type { AnalysisJob, BrowserStatus, CodexStatus, DownloadJob, DownloadOpti
 import { api, onEvent, type WorkbenchEvent } from './api'
 import './styles.css'
 import './task-tabs.css'
+import './compact-library.css'
 
 type Tab = 'download' | 'library' | 'tasks' | 'settings'
 type TaskTab = 'analysis' | 'publisher'
@@ -128,7 +129,7 @@ function App() {
   useEffect(() => { if (!authenticated) return; loadLibrary(); loadTasks(); loadSettings(); return onEvent(raw => { const event = raw as WorkbenchEvent; if (event.type === 'library') loadLibrary(); if (event.type === 'analysis' || event.type === 'publisher') { loadLibrary(); loadTasks() } if (event.type === 'codex') loadSettings() }) }, [authenticated, loadLibrary, loadSettings, loadTasks])
   if (authenticated === null) return <div className="splash">正在启动工作台…</div>
   if (!authenticated) return <Login onLogin={() => setAuthenticated(true)} />
-  return <div className="app"><header><div className="brand"><div className="brand-mark">▶</div><div><h1>Social Video 工作台</h1><p>下载 · 分析 · 审核 · 发布</p></div></div><nav>{([['download', '下载'], ['library', '媒体库'], ['tasks', '任务'], ['settings', '设置']] as [Tab, string][]).map(([value, label]) => <button className={tab === value ? 'active' : ''} key={value} onClick={() => setTab(value)}>{label}{value === 'tasks' && [...analysisJobs, ...batches].some(item => ['failed', 'needs_attention', 'interrupted'].includes(item.status)) ? <i /> : null}</button>)}</nav></header><div className="content">{tab === 'download' ? <DownloadPage jobs={downloads} setJobs={setDownloads} /> : tab === 'library' ? <LibraryPage assets={assets} reload={loadLibrary} openTasks={taskTab => { try { window.localStorage.setItem(TASK_TAB_STORAGE_KEY, taskTab) } catch { /* storage unavailable */ } setTab('tasks') }} /> : tab === 'tasks' ? <TasksPage analysis={analysisJobs} batches={batches} reload={loadTasks} /> : <SettingsPage tools={tools} codex={codex} browser={browser} refresh={loadSettings} logout={() => void api.auth.logout().then(() => setAuthenticated(false))} />}</div></div>
+  return <div className="app"><header><div className="brand"><div className="brand-mark">▶</div><div><h1>Social Video 工作台</h1><p>下载 · 分析 · 审核 · 发布</p></div></div><nav>{([['download', '下载'], ['library', '媒体库'], ['tasks', '任务'], ['settings', '设置']] as [Tab, string][]).map(([value, label]) => <button className={tab === value ? 'active' : ''} key={value} onClick={() => setTab(value)}>{label}{value === 'tasks' && [...analysisJobs, ...batches].some(item => ['failed', 'needs_attention', 'interrupted'].includes(item.status)) ? <i /> : null}</button>)}</nav></header><div className={tab === 'library' ? 'content library-content' : 'content'}>{tab === 'download' ? <DownloadPage jobs={downloads} setJobs={setDownloads} /> : tab === 'library' ? <LibraryPage assets={assets} reload={loadLibrary} openTasks={taskTab => { try { window.localStorage.setItem(TASK_TAB_STORAGE_KEY, taskTab) } catch { /* storage unavailable */ } setTab('tasks') }} /> : tab === 'tasks' ? <TasksPage analysis={analysisJobs} batches={batches} reload={loadTasks} /> : <SettingsPage tools={tools} codex={codex} browser={browser} refresh={loadSettings} logout={() => void api.auth.logout().then(() => setAuthenticated(false))} />}</div></div>
 }
 
 export default App
