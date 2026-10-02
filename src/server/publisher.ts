@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { mkdir, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { BrowserStatus, PublishBatch, PublishJob } from '../shared/types'
@@ -8,6 +9,12 @@ import type { AppDatabase } from './db'
 type PublishInput = { assetId: string; title: string; topics: string[]; publishAt?: string; aigc?: boolean }
 const terminal = new Set(['published', 'scheduled', 'failed', 'needs_login', 'needs_attention', 'interrupted'])
 const sleep = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds))
+
+function loadBrowserToken(mode: BrowserStatus['mode']) {
+  if (mode !== 'host') return ''
+  if (process.env.SVD_BROWSER_TOKEN) return process.env.SVD_BROWSER_TOKEN
+  try { return readFileSync(process.env.SVD_BROWSER_TOKEN_FILE || '/config/local-browser.token', 'utf8').trim() } catch { return '' }
+}
 
 export class PublisherService {
   private running = false
@@ -18,15 +25,19 @@ export class PublisherService {
   private script = path.join(process.env.SVD_SKILL_DIR || path.resolve(process.cwd(), 'skills/english-video-catalog'), 'scripts/douyin_publisher.mjs')
   private artifactDir = path.join(process.env.SVD_CONFIG_DIR || '/config', 'publish-artifacts')
   private tempDir = path.join(process.env.SVD_CONFIG_DIR || '/config', 'publish-temp')
+  private browserMode: BrowserStatus['mode'] = process.env.SVD_BROWSER_MODE === 'host' ? 'host' : 'container'
+  private browserUrl = process.env.SVD_BROWSER_CDP || 'http://browser:9222'
+  private browserToken = loadBrowserToken(this.browserMode)
   constructor(private db: AppDatabase, private changed: () => void) { void this.resume() }
   async status(): Promise<BrowserStatus> {
     let ready = false
-    try { const response = await fetch(`${process.env.SVD_BROWSER_CDP || 'http://browser:9222'}/json/version`, { signal: AbortSignal.timeout(2500) }); ready = response.ok } catch { /* browser offline */ }
-    return { ready, loginStatus: this.loginStatus, message: ready ? this.message : '远程浏览器不可用', remoteUrl: '/remote-browser/vnc.html?autoconnect=1&resize=scale', manageUrl: 'https://creator.douyin.com/creator-micro/content/manage' }
+    try { const response = await fetch(`${this.browserUrl}/json/version`, { headers: this.browserToken ? { authorization: `Bearer ${this.browserToken}` } : undefined, signal: AbortSignal.timeout(2500) }); ready = response.ok } catch { /* browser offline */ }
+    const manageUrl = 'https://creator.douyin.com/creator-micro/content/manage'
+    return { ready, mode: this.browserMode, loginStatus: this.loginStatus, message: ready ? this.message : this.browserMode === 'host' ? '本地浏览器连接助手未启动' : '远程浏览器不可用', remoteUrl: this.browserMode === 'host' ? manageUrl : '/remote-browser/vnc.html?autoconnect=1&resize=scale', manageUrl }
   }
   login() {
     if (this.loginRunning) return
-    this.loginRunning = true; this.message = '请在站内远程浏览器中扫码登录'; this.changed()
+    this.loginRunning = true; this.message = this.browserMode === 'host' ? '请在本地浏览器中扫码登录' : '请在站内远程浏览器中扫码登录'; this.changed()
     void this.execute(['login'], event => {
       if (event.event === 'login_ready') { this.loginStatus = 'ready'; this.message = '抖音创作者中心已登录' }
       if (event.event === 'error') { this.loginStatus = 'needs_attention'; this.message = String(event.message || '登录未完成') }
@@ -113,7 +124,7 @@ export class PublisherService {
   }
   private execute(args: string[], onEvent: (event: Record<string, unknown>) => void) {
     return new Promise<void>(resolve => {
-      const child = spawn('node', [this.script, ...args], { env: { ...process.env, DOUYIN_CDP_URL: process.env.SVD_BROWSER_CDP || 'http://browser:9222' }, windowsHide: true }); let buffer = ''
+      const child = spawn('node', [this.script, ...args], { env: { ...process.env, DOUYIN_CDP_URL: this.browserUrl, DOUYIN_CDP_TOKEN: this.browserToken }, windowsHide: true }); let buffer = ''
       const consume = (value: Buffer) => { buffer += value.toString(); const lines = buffer.split(/\r?\n/); buffer = lines.pop() || ''; for (const line of lines) { try { onEvent(JSON.parse(line)) } catch { /* ignore browser diagnostics */ } } }
       child.stdout.on('data', consume); child.stderr.on('data', consume); child.on('error', error => { onEvent({ event: 'error', message: error.message }); resolve() }); child.on('close', () => { if (buffer.trim()) { try { onEvent(JSON.parse(buffer)) } catch { /* ignore */ } } resolve() })
     })

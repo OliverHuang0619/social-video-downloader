@@ -5,16 +5,18 @@ services:
       target: runtime
     image: social-video-workbench:latest
     restart: unless-stopped
-    depends_on:
-      browser:
-        condition: service_healthy
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-3000}:3000"
     environment:
       ADMIN_PASSWORD_FILE: /run/secrets/admin_password
       SESSION_SECRET_FILE: /run/secrets/session_secret
       SVD_SECURE_COOKIE: "${SVD_SECURE_COOKIE:-false}"
+      SVD_BROWSER_MODE: "${SVD_BROWSER_MODE:-container}"
+      SVD_BROWSER_CDP: "${SVD_BROWSER_CDP:-http://browser:9222}"
+      SVD_BROWSER_TOKEN_FILE: /config/local-browser.token
       TZ: "${TZ:-Asia/Shanghai}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     secrets:
       - admin_password
       - session_secret

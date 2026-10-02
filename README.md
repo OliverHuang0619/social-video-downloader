@@ -26,6 +26,22 @@
 ./deploy.sh redeploy
 ```
 
+### 本地电脑浏览器模式
+
+在 macOS 或 Linux 本机部署时，可以让发布器使用桌面上的 Chrome/Chromium，而不是 Browser 容器：
+
+```bash
+./deploy.sh deploy-local
+```
+
+脚本会启动一个可见的本地浏览器窗口，使用独立的 `config/local-browser-profile` 持久资料目录。Chrome 的 CDP 只监听 `127.0.0.1`；本地连接助手通过 64 位随机令牌鉴权后供 App 容器访问，未授权请求会被拒绝。首次使用需要在这个独立窗口中登录抖音。重新部署使用：
+
+```bash
+./deploy.sh redeploy-local
+```
+
+如果没有自动找到浏览器，可设置 `LOCAL_BROWSER_BIN='/浏览器可执行文件路径'`。可以使用 `./local-browser.sh start|stop|status` 单独管理本地浏览器。服务器、NAS 或无人值守部署仍应使用默认的 Browser 容器模式。
+
 查看状态与日志：
 
 ```bash

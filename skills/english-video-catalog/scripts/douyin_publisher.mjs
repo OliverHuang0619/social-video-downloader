@@ -11,6 +11,7 @@ const command = process.argv[2] || "";
 const payloadPath = process.argv[3] || "";
 const profileDir = process.env.DOUYIN_PROFILE_DIR || path.join(process.env.HOME || ".", ".config", "english-video-catalog", "douyin-profile");
 const cdpUrl = process.env.DOUYIN_CDP_URL || "";
+const cdpToken = process.env.DOUYIN_CDP_TOKEN || "";
 const TYPE_DELAY_MS = 35;
 const ACTION_SETTLE_MS = 350;
 
@@ -25,7 +26,7 @@ function readPayload() {
 
 async function launch() {
   if (cdpUrl) {
-    const browser = await chromium.connectOverCDP(cdpUrl);
+    const browser = await chromium.connectOverCDP(cdpUrl, cdpToken ? { headers: { authorization: `Bearer ${cdpToken}` } } : undefined);
     const context = browser.contexts()[0];
     if (!context) throw new Error("远程 Chromium 未提供持久浏览器上下文");
     return { context, remote: true };
