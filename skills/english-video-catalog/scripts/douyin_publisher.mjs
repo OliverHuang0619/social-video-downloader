@@ -1,0 +1,274 @@
+#!/usr/bin/env node
+
+import fs from "node:fs";
+import path from "node:path";
+import process from "node:process";
+import { chromium } from "playwright-core";
+
+const UPLOAD_URL = "https://creator.douyin.com/creator-micro/content/upload";
+const MANAGE_URL = "https://creator.douyin.com/creator-micro/content/manage";
+const command = process.argv[2] || "";
+const payloadPath = process.argv[3] || "";
+const profileDir = process.env.DOUYIN_PROFILE_DIR || path.join(process.env.HOME || ".", ".config", "english-video-catalog", "douyin-profile");
+
+function emit(event, data = {}) {
+  process.stdout.write(`${JSON.stringify({ event, ...data })}\n`);
+}
+
+function readPayload() {
+  if (!payloadPath) return {};
+  return JSON.parse(fs.readFileSync(payloadPath, "utf8"));
+}
+
+async function launch() {
+  fs.mkdirSync(profileDir, { recursive: true, mode: 0o700 });
+  const context = await chromium.launchPersistentContext(profileDir, {
+    channel: "chrome",
+    headless: false,
+    viewport: { width: 1440, height: 960 },
+    args: ["--disable-blink-features=AutomationControlled", "--start-maximized"],
+  });
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+  });
+  return context;
+}
+
+async function hasUploadInput(page, timeout = 5000) {
+  try {
+    await page.locator('input[type="file"]').first().waitFor({ state: "attached", timeout });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function hasDouyinSession(context) {
+  const cookies = await context.cookies("https://creator.douyin.com");
+  const sessionNames = new Set(["sessionid", "sessionid_ss", "sid_guard", "sid_tt"]);
+  return cookies.some(cookie => sessionNames.has(cookie.name) && cookie.value);
+}
+
+async function ensureUploadInput(page, timeout = 90000) {
+  const deadline = Date.now() + timeout;
+  let openedPublish = false;
+  let openedVideo = false;
+  while (Date.now() < deadline) {
+    if (await hasUploadInput(page, 1500)) return page.locator('input[type="file"]').first();
+    const body = await page.locator("body").innerText().catch(() => "");
+    if (!openedPublish && body.includes("作品发布")) {
+      const entry = page.getByText("作品发布", { exact: true }).last();
+      if (await entry.count()) {
+        await entry.click().catch(() => {});
+        openedPublish = true;
+      }
+    }
+    if (!openedVideo && body.includes("发布视频")) {
+      const video = page.getByText("发布视频", { exact: true }).last();
+      if (await video.count()) {
+        await video.click().catch(() => {});
+        openedVideo = true;
+      }
+    }
+    await page.waitForTimeout(1000);
+  }
+  return null;
+}
+
+async function login() {
+  const context = await launch();
+  const page = context.pages()[0] || await context.newPage();
+  emit("login_opened", { url: UPLOAD_URL });
+  await page.goto(UPLOAD_URL, { waitUntil: "domcontentloaded", timeout: 90000 });
+  if (await hasDouyinSession(context)) {
+    emit("login_ready");
+    await context.close();
+    return;
+  }
+  if (!await hasUploadInput(page, 3000)) {
+    const loginButton = page.getByRole("button", { name: /登录|扫码登录/ }).first();
+    if (await loginButton.count()) await loginButton.click().catch(() => {});
+  }
+  const deadline = Date.now() + 10 * 60 * 1000;
+  while (Date.now() < deadline) {
+    if (await hasDouyinSession(context) || await hasUploadInput(page, 2000)) {
+      emit("login_ready");
+      await page.waitForTimeout(1500);
+      await context.close();
+      return;
+    }
+    if (page.isClosed()) throw new Error("登录窗口已关闭，但尚未检测到登录成功");
+    await page.waitForTimeout(1500);
+  }
+  await context.close();
+  throw new Error("等待扫码登录超时，请重新打开登录窗口");
+}
+
+async function fillText(locator, value) {
+  await locator.scrollIntoViewIfNeeded();
+  const tag = await locator.evaluate(el => el.tagName.toLowerCase());
+  if (tag === "input" || tag === "textarea") {
+    await locator.fill(value);
+    return;
+  }
+  await locator.click();
+  await locator.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+  await locator.press("Backspace");
+  await locator.pressSequentially(value, { delay: 15 });
+}
+
+async function firstExisting(page, selectors, timeout = 30000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    for (const selector of selectors) {
+      const locator = page.locator(selector).first();
+      if (await locator.count()) return locator;
+    }
+    await page.waitForTimeout(500);
+  }
+  return null;
+}
+
+async function waitForEditor(page) {
+  await Promise.race([
+    page.waitForURL(/creator-micro\/content\/(publish|post\/video)/, { timeout: 180000 }),
+    page.locator('input[placeholder*="作品标题"]').first().waitFor({ state: "visible", timeout: 180000 }),
+  ]).catch(() => {});
+  const title = await firstExisting(page, [
+    'input[placeholder="填写作品标题，为作品获得更多流量"]',
+    'input[placeholder*="作品标题"]',
+    'input[placeholder*="标题"]',
+  ], 30000);
+  if (!title) throw new Error("视频已上传，但未找到作品标题输入框；抖音页面可能已更新");
+  return title;
+}
+
+async function waitForUpload(page) {
+  const deadline = Date.now() + 20 * 60 * 1000;
+  while (Date.now() < deadline) {
+    const text = await page.locator("body").innerText().catch(() => "");
+    if (/上传失败|转码失败/.test(text)) throw new Error("抖音提示视频上传失败");
+    if (/重新上传|上传成功|发布设置/.test(text)) return;
+    await page.waitForTimeout(2000);
+  }
+  throw new Error("等待视频上传完成超时");
+}
+
+async function setSchedule(page, isoValue) {
+  const publishDate = new Date(isoValue);
+  if (Number.isNaN(publishDate.getTime())) throw new Error("定时发布时间无效");
+  const pad = value => String(value).padStart(2, "0");
+  const value = `${publishDate.getFullYear()}-${pad(publishDate.getMonth() + 1)}-${pad(publishDate.getDate())} ${pad(publishDate.getHours())}:${pad(publishDate.getMinutes())}`;
+  const schedule = page.locator("[class^='radio']:has-text('定时发布'), label:has-text('定时发布')").first();
+  if (!await schedule.count()) throw new Error("未找到“定时发布”选项；该账号可能没有网页定时发布权限");
+  await schedule.scrollIntoViewIfNeeded();
+  await schedule.evaluate(el => el.click()).catch(() => schedule.click());
+  await page.waitForTimeout(800);
+  const timeInput = await firstExisting(page, [
+    '.semi-input[placeholder="日期和时间"]',
+    'input[placeholder="日期和时间"]',
+    '.semi-datepicker-input input',
+    'input[placeholder*="发布时间"]',
+  ], 8000);
+  if (!timeInput) throw new Error("已选择定时发布，但未找到日期和时间输入框");
+  await timeInput.fill(value);
+  await timeInput.press("Enter");
+  await page.waitForTimeout(500);
+  const actual = await timeInput.inputValue().catch(() => "");
+  if (!actual.includes(value.slice(0, 16))) throw new Error(`抖音未接受定时时间 ${value}`);
+}
+
+async function setAigcDeclaration(page) {
+  try {
+    const entry = page.getByText("请选择自主声明", { exact: true }).first();
+    const fallback = page.getByText("自主声明", { exact: true }).first();
+    const target = await entry.count() ? entry : fallback;
+    if (!await target.count()) return false;
+    await target.scrollIntoViewIfNeeded();
+    await target.click();
+    await page.waitForTimeout(500);
+    const row = page.locator('label:has-text("内容由AI生成")').first();
+    const text = page.getByText("内容由AI生成", { exact: true }).first();
+    const option = await row.count() ? row : text;
+    if (!await option.count()) return false;
+    await option.click();
+    const confirm = page.getByRole("button", { name: "确定", exact: true }).last();
+    if (await confirm.count()) await confirm.click();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function publish() {
+  const job = readPayload();
+  const artifactDir = path.resolve(job.artifactDir || ".");
+  fs.mkdirSync(artifactDir, { recursive: true });
+  const screenshot = path.join(artifactDir, `${job.jobId || "douyin"}.png`);
+  const context = await launch();
+  const page = context.pages()[0] || await context.newPage();
+  try {
+    emit("launching");
+    await page.goto(UPLOAD_URL, { waitUntil: "domcontentloaded", timeout: 90000 });
+    if (!await hasDouyinSession(context)) throw new Error("LOGIN_REQUIRED：请先点击报告中的“登录抖音”并扫码登录");
+    const fileInput = await ensureUploadInput(page);
+    if (!fileInput) throw new Error("已登录抖音，但发布页面一直未显示上传控件；请打开作品管理检查账号状态后重试");
+    emit("uploading");
+    await fileInput.setInputFiles(job.file);
+    const titleInput = await waitForEditor(page);
+    await fillText(titleInput, String(job.title || "").slice(0, 30));
+    const description = [job.title, ...(job.topics || []).map(topic => `#${String(topic).replace(/^#+/, "")}`)].filter(Boolean).join(" ");
+    const descriptionInput = await firstExisting(page, [
+      ".zone-container",
+      '[contenteditable="true"][data-placeholder*="作品"]',
+      'textarea[placeholder*="作品描述"]',
+      '[contenteditable="true"]',
+    ], 15000);
+    if (!descriptionInput) throw new Error("未找到作品描述输入框");
+    await fillText(descriptionInput, description);
+    await waitForUpload(page);
+    if (job.aigc) {
+      const set = await setAigcDeclaration(page);
+      emit("aigc", { set });
+    }
+    if (job.publishAt) {
+      emit("scheduling", { publishAt: job.publishAt });
+      await setSchedule(page, job.publishAt);
+    }
+    const captured = await page.screenshot({ path: screenshot, fullPage: false, timeout: 10000 })
+      .then(() => true)
+      .catch(() => false);
+    emit("submitting", captured ? { screenshot } : {});
+    const buttonName = job.publishAt ? "定时发布" : "发布";
+    let publishButton = page.getByRole("button", { name: buttonName, exact: true });
+    if (!await publishButton.count()) publishButton = page.locator('button:has-text("发布")').last();
+    if (!await publishButton.count()) throw new Error("未找到最终发布按钮");
+    await publishButton.click();
+    const success = await Promise.race([
+      page.waitForURL(/creator-micro\/content\/manage/, { timeout: 120000 }).then(() => true),
+      page.getByText(/发布成功|预约成功|已成功预约/).first().waitFor({ state: "visible", timeout: 120000 }).then(() => true),
+    ]).catch(() => false);
+    if (!success) throw new Error("点击发布后未检测到成功结果，请到作品管理确认，避免重复提交");
+    emit(job.publishAt ? "scheduled" : "published", { manageUrl: MANAGE_URL, screenshot });
+  } catch (error) {
+    await page.screenshot({ path: screenshot, fullPage: false, timeout: 10000 }).catch(() => {});
+    emit("error", {
+      message: String(error?.message || error),
+      ...(fs.existsSync(screenshot) ? { screenshot } : {}),
+      url: page.url(),
+    });
+    process.exitCode = 1;
+  } finally {
+    await page.waitForTimeout(1200).catch(() => {});
+    await context.close().catch(() => {});
+  }
+}
+
+try {
+  if (command === "login") await login();
+  else if (command === "publish") await publish();
+  else throw new Error("用法：douyin_publisher.mjs login|publish [payload.json]");
+} catch (error) {
+  emit("error", { message: String(error?.message || error) });
+  process.exitCode = 1;
+}

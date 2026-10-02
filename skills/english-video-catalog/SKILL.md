@@ -1,6 +1,6 @@
 ---
 name: english-video-catalog
-description: Classify English-language videos from a directory, or summarize one video, then generate and open a local searchable report with Chinese and concise English titles plus copy buttons. Use for local video topic catalogs and per-video key-topic summaries; do not use merely to rename, move, or transcode media.
+description: Classify English-language videos from a directory, or summarize one video, then generate and open a local searchable report with Chinese and concise English titles, copy controls, and optional direct Douyin web publishing. Use for local video topic catalogs and per-video key-topic summaries; do not use merely to rename, move, or transcode media.
 ---
 
 # English Video Catalog
@@ -25,7 +25,7 @@ Do not move, rename, or modify source videos unless the user separately requests
 4. If speech is important but no transcript backend exists, do not install software or use a paid API without authorization. Continue from visual/filename evidence when adequate, lower confidence, and state the limitation. Never invent spoken details.
 5. For a directory, inspect a representative spread before choosing categories. Prefer 5–12 stable, mutually understandable categories; use `Other` only for true outliers. Classification means labeling in the report, not changing filesystem layout.
 6. Write `OUTPUT/results.json` using the schema below, then run `scripts/build_report.py OUTPUT/results.json --output OUTPUT/index.html`.
-7. Start `scripts/serve_report.py OUTPUT` and open the printed localhost URL in the local browser. Keep the server running long enough for the user to view, track, filter, and copy results. If browser opening is unavailable, provide a clickable absolute path to `index.html`.
+7. Run `npm install` once in `scripts/` when Douyin web publishing is needed, then start `scripts/serve_report.py OUTPUT` and open the printed localhost URL. Keep the server running while the user views, tracks, filters, copies, or publishes. If browser opening is unavailable, provide a clickable absolute path to `index.html`.
 
 For large directories, process in batches if needed, but do not silently omit files. Compare result count and paths against `manifest.json` before reporting completion.
 
@@ -81,9 +81,23 @@ The HTML report must:
 - retain title/category/topic/summary search and category filtering;
 - provide separate copy buttons for the Chinese title, English title, key topics, and summary, plus a whole-card copy action;
 - use an explicit `搜索` button to apply keyword search, and apply the same search when Enter is pressed in the search field. Keep category and processing-status filters immediate.
+- provide a per-video Douyin publish button and multi-select batch publishing controls when the report is served through `serve_report.py`;
+- prefill the publish title from `english_title`, enforcing Douyin's 30-character limit, and prefill up to five topics with visible `#` prefixes;
+- support immediate or scheduled single-video publishing, require batch publishing to use a future start time, allow editing single-video metadata, and default batch spacing to one hour;
+- show persistent local publishing history and link to Douyin's work-management page;
+- show a final confirmation before the local bridge uploads or publishes. Never create a real publishing task merely by opening the report.
+
+## Direct Douyin web publishing
+
+The publishing bridge uses Playwright with the installed system Chrome to operate `https://creator.douyin.com/` directly. It keeps a dedicated persistent browser profile at `~/.config/english-video-catalog/douyin-profile`; never commit, copy, print, or expose that directory because it contains the user's authenticated session.
+
+The first use requires the user to click `登录抖音` and scan the official login QR code. Reuse that session for later jobs. A login expiry, CAPTCHA, account verification, page redesign, or platform risk control may still require manual intervention; report this as `需要登录` or `需要检查` instead of retrying blindly.
+
+Use the English title as the work title and append visible `#` topics to the description. The report may request the platform's `内容由AI生成` declaration; keep it selected by default for AI-generated videos but let the user change it before submission. For conservative compatibility, validate scheduled times as at least two hours and no more than seven days ahead. Process a batch serially to avoid concurrent use of the same browser profile.
 
 ## Scripts
 
 - `scripts/prepare_media.py`: inventory, metadata, subtitle discovery, and contact sheets.
 - `scripts/build_report.py`: validate result shape/title length and render a searchable, stateful, filterable, copy-friendly HTML page.
-- `scripts/serve_report.py`: serve the report on localhost and print its URL.
+- `scripts/serve_report.py`: serve the report, persist job history, and run confirmed publishing jobs serially.
+- `scripts/douyin_publisher.mjs`: open the persistent Chrome profile, upload videos, fill titles/topics, configure immediate or scheduled publication, submit, and capture diagnostic screenshots.
