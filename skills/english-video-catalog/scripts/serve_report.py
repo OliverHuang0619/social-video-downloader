@@ -18,6 +18,7 @@ from pathlib import Path
 
 
 ACTIVE_STATES = {"launching", "uploading", "scheduling", "submitting", "running"}
+BATCH_COOLDOWN_SECONDS = 30
 
 
 class DouyinBrowserBridge:
@@ -96,12 +97,15 @@ class DouyinBrowserBridge:
 
     def _resume_queued_batches(self):
         for batch_id, batch in self.batches.items():
-            if (
-                batch.get("provider") == "douyin-web"
-                and batch.get("status") == "queued"
-                and batch.get("jobs")
-                and all(job.get("status") == "queued" for job in batch["jobs"])
-            ):
+            jobs = batch.get("jobs") or []
+            is_local = batch.get("dispatchMode") == "local"
+            platform_ready = batch.get("status") == "queued" and all(job.get("status") == "queued" for job in jobs)
+            local_ready = (
+                batch.get("status") in {"queued", "waiting_local"}
+                and all(job.get("status") in {"queued", "waiting_local", "published"} for job in jobs)
+                and any(job.get("status") in {"queued", "waiting_local"} for job in jobs)
+            )
+            if batch.get("provider") == "douyin-web" and jobs and (local_ready if is_local else platform_ready):
                 threading.Thread(target=self._run_batch, args=(batch_id,), daemon=True).start()
 
     def status(self):
@@ -184,7 +188,7 @@ class DouyinBrowserBridge:
                 output.append(topic)
         return output[:5]
 
-    def validate_job(self, job, *, allow_immediate: bool):
+    def validate_job(self, job, *, allow_immediate: bool, dispatch_mode: str):
         path = str(Path(str(job.get("file", ""))).expanduser().resolve())
         if path not in self.allowed_files or not Path(path).is_file():
             raise ValueError("视频文件不在本报告清单中")
@@ -204,29 +208,41 @@ class DouyinBrowserBridge:
             if publish_at.tzinfo is None:
                 raise ValueError("定时发布时间必须包含时区")
             now = datetime.now(timezone.utc)
-            if publish_at < now + timedelta(hours=2):
-                raise ValueError("抖音网页定时发布需至少提前 2 小时")
-            if publish_at > now + timedelta(days=7):
+            minimum = timedelta(minutes=1) if dispatch_mode == "local" else timedelta(hours=2)
+            if publish_at < now + minimum:
+                raise ValueError("本地定时需至少提前 1 分钟" if dispatch_mode == "local" else "抖音网页定时发布需至少提前 2 小时")
+            if dispatch_mode == "platform" and publish_at > now + timedelta(days=7):
                 raise ValueError("抖音网页定时发布暂按最多提前 7 天校验")
-        elif not allow_immediate:
+        elif not allow_immediate or dispatch_mode == "local":
             raise ValueError("批量发布必须指定首条定时时间")
         if Path(path).stat().st_size > 4 * 1024 * 1024 * 1024:
             raise ValueError("抖音网页上传文件不能超过 4GB")
-        return {
+        validated = {
             "file": path, "title": title, "topics": topics,
-            "publishAt": publish_at.isoformat() if publish_at else None,
             "aigc": bool(job.get("aigc", True)),
         }
+        if dispatch_mode == "local":
+            validated.update({"executeAt": publish_at.isoformat(), "publishAt": None})
+        else:
+            validated["publishAt"] = publish_at.isoformat() if publish_at else None
+        return validated
 
-    def enqueue(self, jobs):
+    def enqueue(self, jobs, dispatch_mode="platform"):
         if not self.dependencies_ready():
             raise RuntimeError("缺少 Playwright 依赖，请先运行 npm install")
         if not isinstance(jobs, list) or not jobs:
             raise ValueError("没有可发布的视频")
-        validated = [self.validate_job(job, allow_immediate=len(jobs) == 1) for job in jobs]
+        if dispatch_mode not in {"platform", "local"}:
+            raise ValueError("批量执行方式无效")
+        if dispatch_mode == "local" and len(jobs) == 1:
+            raise ValueError("本地定时模式仅用于批量发布")
+        validated = [
+            self.validate_job(job, allow_immediate=len(jobs) == 1, dispatch_mode=dispatch_mode)
+            for job in jobs
+        ]
         batch_id = uuid.uuid4().hex[:12]
         batch = {
-            "id": batch_id, "provider": "douyin-web",
+            "id": batch_id, "provider": "douyin-web", "dispatchMode": dispatch_mode,
             "createdAt": datetime.now().astimezone().isoformat(), "status": "queued",
             "jobs": [{**job, "id": f"{batch_id}-{index + 1:03d}", "status": "queued"} for index, job in enumerate(validated)],
         }
@@ -244,17 +260,38 @@ class DouyinBrowserBridge:
             self._save()
 
     def _run_batch(self, batch_id: str):
-        with self.browser_lock:
+        with self.lock:
+            batch = self.batches[batch_id]
+            batch["status"] = "waiting_local" if batch.get("dispatchMode") == "local" else "running"
+            self._save()
+        for index, job in enumerate(batch["jobs"]):
+            if job.get("status") in {"published", "scheduled"}:
+                continue
+            if job.get("status") not in {"queued", "waiting_local"}:
+                break
+            if batch.get("dispatchMode") == "local":
+                execute_at = datetime.fromisoformat(job["executeAt"].replace("Z", "+00:00"))
+                while True:
+                    remaining = (execute_at - datetime.now(timezone.utc)).total_seconds()
+                    if remaining <= 0:
+                        break
+                    with self.lock:
+                        job["status"] = "waiting_local"
+                        batch["status"] = "waiting_local"
+                        batch["nextRunAt"] = job["executeAt"]
+                        self._save()
+                    time.sleep(min(remaining, 30))
             with self.lock:
-                batch = self.batches[batch_id]
                 batch["status"] = "running"
+                batch.pop("nextRunAt", None)
                 self._save()
-            for job in batch["jobs"]:
-                self.artifact_dir.mkdir(parents=True, exist_ok=True)
-                payload_path = self.artifact_dir / f".{job['id']}.json"
-                payload = {**job, "artifactDir": str(self.artifact_dir), "jobId": job["id"]}
-                payload_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-                try:
+            self.artifact_dir.mkdir(parents=True, exist_ok=True)
+            payload_path = self.artifact_dir / f".{job['id']}.json"
+            payload = {**job, "publishAt": None if batch.get("dispatchMode") == "local" else job.get("publishAt"),
+                       "artifactDir": str(self.artifact_dir), "jobId": job["id"]}
+            payload_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            try:
+                with self.browser_lock:
                     process = subprocess.Popen(
                         [self.node, str(self.script), "publish", str(payload_path)],
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self._environment(),
@@ -275,28 +312,38 @@ class DouyinBrowserBridge:
                             self._set_job(batch_id, job, name, **extra)
                     stderr = process.stderr.read().strip() if process.stderr else ""
                     return_code = process.wait()
-                    if return_code != 0:
-                        message = (error_event or {}).get("message") or stderr or "抖音网页发布失败"
-                        state = "needs_login" if "LOGIN_REQUIRED" in message else "needs_attention"
-                        extra = {key: value for key, value in (error_event or {}).items() if key not in {"event", "message"}}
-                        self._set_job(batch_id, job, state, error=message.replace("LOGIN_REQUIRED：", ""), **extra)
-                    elif job.get("status") not in {"published", "scheduled"}:
-                        self._set_job(batch_id, job, "needs_attention", error="浏览器已结束，但没有明确发布结果；请到作品管理确认")
-                except Exception as error:
-                    self._set_job(batch_id, job, "failed", error=str(error))
-                finally:
-                    payload_path.unlink(missing_ok=True)
-            with self.lock:
-                statuses = {job.get("status") for job in batch["jobs"]}
-                if statuses <= {"published", "scheduled"}:
-                    batch["status"] = "completed"
-                elif statuses & {"published", "scheduled"}:
-                    batch["status"] = "partial"
-                elif statuses & {"needs_login", "needs_attention"}:
-                    batch["status"] = "needs_attention"
-                else:
-                    batch["status"] = "failed"
-                self._save()
+                if return_code != 0:
+                    message = (error_event or {}).get("message") or stderr or "抖音网页发布失败"
+                    state = "needs_login" if "LOGIN_REQUIRED" in message else "needs_attention"
+                    extra = {key: value for key, value in (error_event or {}).items() if key not in {"event", "message"}}
+                    self._set_job(batch_id, job, state, error=message.replace("LOGIN_REQUIRED：", ""), **extra)
+                elif job.get("status") not in {"published", "scheduled"}:
+                    self._set_job(batch_id, job, "needs_attention", error="浏览器已结束，但没有明确发布结果；请到作品管理确认")
+            except Exception as error:
+                self._set_job(batch_id, job, "failed", error=str(error))
+            finally:
+                payload_path.unlink(missing_ok=True)
+            if job.get("status") in {"failed", "needs_login", "needs_attention"}:
+                with self.lock:
+                    for remaining_job in batch["jobs"][index + 1:]:
+                        if remaining_job.get("status") in {"queued", "waiting_local"}:
+                            remaining_job["status"] = "interrupted"
+                            remaining_job["error"] = "前序任务需要人工检查，已暂停后续发布以避免重复操作"
+                    self._save()
+                break
+            if batch.get("dispatchMode") != "local" and index + 1 < len(batch["jobs"]):
+                time.sleep(BATCH_COOLDOWN_SECONDS)
+        with self.lock:
+            statuses = {job.get("status") for job in batch["jobs"]}
+            if statuses <= {"published", "scheduled"}:
+                batch["status"] = "completed"
+            elif statuses & {"published", "scheduled"}:
+                batch["status"] = "partial"
+            elif statuses & {"needs_login", "needs_attention"}:
+                batch["status"] = "needs_attention"
+            else:
+                batch["status"] = "failed"
+            self._save()
 
 
 def make_handler(directory: Path, bridge: DouyinBrowserBridge):
@@ -329,7 +376,7 @@ def make_handler(directory: Path, bridge: DouyinBrowserBridge):
                     return self.json_response(404, {"error": "Not found"})
                 length = int(self.headers.get("Content-Length", "0"))
                 payload = json.loads(self.rfile.read(length) or b"{}")
-                return self.json_response(202, bridge.enqueue(payload.get("jobs")))
+                return self.json_response(202, bridge.enqueue(payload.get("jobs"), payload.get("dispatchMode", "platform")))
             except (ValueError, RuntimeError, json.JSONDecodeError) as error:
                 return self.json_response(400, {"error": str(error)})
 

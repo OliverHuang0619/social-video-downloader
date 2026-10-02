@@ -10,6 +10,8 @@ const MANAGE_URL = "https://creator.douyin.com/creator-micro/content/manage";
 const command = process.argv[2] || "";
 const payloadPath = process.argv[3] || "";
 const profileDir = process.env.DOUYIN_PROFILE_DIR || path.join(process.env.HOME || ".", ".config", "english-video-catalog", "douyin-profile");
+const TYPE_DELAY_MS = 35;
+const ACTION_SETTLE_MS = 350;
 
 function emit(event, data = {}) {
   process.stdout.write(`${JSON.stringify({ event, ...data })}\n`);
@@ -26,12 +28,25 @@ async function launch() {
     channel: "chrome",
     headless: false,
     viewport: { width: 1440, height: 960 },
-    args: ["--disable-blink-features=AutomationControlled", "--start-maximized"],
-  });
-  await context.addInitScript(() => {
-    Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+    args: ["--start-maximized"],
   });
   return context;
+}
+
+async function ensureNoVerificationChallenge(page) {
+  const body = await page.locator("body").innerText().catch(() => "");
+  const challenge = [
+    "请完成安全验证",
+    "请完成验证",
+    "滑块验证",
+    "验证码",
+    "访问过于频繁",
+    "操作过于频繁",
+    "账号存在风险",
+  ].find(text => body.includes(text));
+  if (challenge) {
+    throw new Error(`MANUAL_REVIEW_REQUIRED：抖音页面提示“${challenge}”，自动发布已暂停，请在可见浏览器中人工处理`);
+  }
 }
 
 async function hasUploadInput(page, timeout = 5000) {
@@ -106,15 +121,12 @@ async function login() {
 
 async function fillText(locator, value) {
   await locator.scrollIntoViewIfNeeded();
-  const tag = await locator.evaluate(el => el.tagName.toLowerCase());
-  if (tag === "input" || tag === "textarea") {
-    await locator.fill(value);
-    return;
-  }
   await locator.click();
+  await locator.page().waitForTimeout(ACTION_SETTLE_MS);
   await locator.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
   await locator.press("Backspace");
-  await locator.pressSequentially(value, { delay: 15 });
+  await locator.pressSequentially(value, { delay: TYPE_DELAY_MS });
+  await locator.page().waitForTimeout(ACTION_SETTLE_MS);
 }
 
 async function firstExisting(page, selectors, timeout = 30000) {
@@ -162,7 +174,7 @@ async function setSchedule(page, isoValue) {
   const schedule = page.locator("[class^='radio']:has-text('定时发布'), label:has-text('定时发布')").first();
   if (!await schedule.count()) throw new Error("未找到“定时发布”选项；该账号可能没有网页定时发布权限");
   await schedule.scrollIntoViewIfNeeded();
-  await schedule.evaluate(el => el.click()).catch(() => schedule.click());
+  await schedule.click();
   await page.waitForTimeout(800);
   const timeInput = await firstExisting(page, [
     '.semi-input[placeholder="日期和时间"]',
@@ -171,7 +183,7 @@ async function setSchedule(page, isoValue) {
     'input[placeholder*="发布时间"]',
   ], 8000);
   if (!timeInput) throw new Error("已选择定时发布，但未找到日期和时间输入框");
-  await timeInput.fill(value);
+  await fillText(timeInput, value);
   await timeInput.press("Enter");
   await page.waitForTimeout(500);
   const actual = await timeInput.inputValue().catch(() => "");
@@ -210,6 +222,7 @@ async function publish() {
   try {
     emit("launching");
     await page.goto(UPLOAD_URL, { waitUntil: "domcontentloaded", timeout: 90000 });
+    await ensureNoVerificationChallenge(page);
     if (!await hasDouyinSession(context)) throw new Error("LOGIN_REQUIRED：请先点击报告中的“登录抖音”并扫码登录");
     const fileInput = await ensureUploadInput(page);
     if (!fileInput) throw new Error("已登录抖音，但发布页面一直未显示上传控件；请打开作品管理检查账号状态后重试");
@@ -235,6 +248,7 @@ async function publish() {
       emit("scheduling", { publishAt: job.publishAt });
       await setSchedule(page, job.publishAt);
     }
+    await ensureNoVerificationChallenge(page);
     const captured = await page.screenshot({ path: screenshot, fullPage: false, timeout: 10000 })
       .then(() => true)
       .catch(() => false);

@@ -83,7 +83,7 @@ The HTML report must:
 - use an explicit `搜索` button to apply keyword search, and apply the same search when Enter is pressed in the search field. Keep category and processing-status filters immediate.
 - provide a per-video Douyin publish button and multi-select batch publishing controls when the report is served through `serve_report.py`;
 - prefill the publish title from `english_title`, enforcing Douyin's 30-character limit, and prefill up to five topics with visible `#` prefixes;
-- support immediate or scheduled single-video publishing, require batch publishing to use a future start time, allow editing single-video metadata, and default batch spacing to one hour;
+- support immediate or scheduled single-video publishing, plus two batch modes: submit the full schedule to Douyin now, or keep jobs locally and publish each one when due; require a future batch start time, allow editing single-video metadata, and default batch spacing to one hour;
 - show persistent local publishing history and link to Douyin's work-management page;
 - show a final confirmation before the local bridge uploads or publishes. Never create a real publishing task merely by opening the report.
 
@@ -93,7 +93,9 @@ The publishing bridge uses Playwright with the installed system Chrome to operat
 
 The first use requires the user to click `登录抖音` and scan the official login QR code. Reuse that session for later jobs. A login expiry, CAPTCHA, account verification, page redesign, or platform risk control may still require manual intervention; report this as `需要登录` or `需要检查` instead of retrying blindly.
 
-Use the English title as the work title and append visible `#` topics to the description. The report may request the platform's `内容由AI生成` declaration; keep it selected by default for AI-generated videos but let the user change it before submission. For conservative compatibility, validate scheduled times as at least two hours and no more than seven days ahead. Process a batch serially to avoid concurrent use of the same browser profile.
+Keep browser automation visible and identifiable. Do not alter browser fingerprints, hide automation indicators, bypass CAPTCHA or safety checks, or add randomized “human-like” behavior intended to evade platform detection. Use ordinary DOM interactions with fixed, observable pacing (scroll, click, wait for response, and type text character by character), a fixed cooldown between platform submissions, and stop the batch when any job needs login or manual review.
+
+Use the English title as the work title and append visible `#` topics to the description. The report may request the platform's `内容由AI生成` declaration; keep it selected by default for AI-generated videos but let the user change it before submission. For platform scheduling, validate times as at least two hours and no more than seven days ahead. For local scheduling, persist the queue, require the first execution at least one minute ahead, resume waiting jobs after a service restart, and clearly warn that the local service and computer must remain available. Process every batch serially to avoid concurrent use of the same browser profile.
 
 ## Scripts
 
