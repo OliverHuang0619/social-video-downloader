@@ -144,7 +144,7 @@ export class AnalysisService {
       // The app itself already runs inside a Docker container whose only media mounts are
       // /downloads, /imports and /config. Codex's Linux workspace sandbox requires user
       // namespaces (bwrap), which standard Docker deployments intentionally do not grant.
-      const result = await executeAnalysisProcess(this.codex.command, ['--ask-for-approval', 'never', '--sandbox', 'danger-full-access', '--cd', output, 'exec', '--json', '--ephemeral', '--skip-git-repo-check', prompt], { env: this.codex.environment(), cwd: output, timeout: 6 * 3600_000, onStart: child => { if (this.active?.id === id) this.active.child = child }, onLine: line => { const detail = parseCodexProgressLine(line); if (detail) this.addLog(id, 'codex', detail.level, detail.message, detail.progress ? { progress: Math.max(this.db.analysis(id)?.progress || 0, detail.progress), message: detail.message } : {}) } })
+      const result = await executeAnalysisProcess(this.codex.command, this.codex.analysisArguments(output, prompt), { env: this.codex.environment(), cwd: output, timeout: 6 * 3600_000, onStart: child => { if (this.active?.id === id) this.active.child = child }, onLine: line => { const detail = parseCodexProgressLine(line); if (detail) this.addLog(id, 'codex', detail.level, detail.message, detail.progress ? { progress: Math.max(this.db.analysis(id)?.progress || 0, detail.progress), message: detail.message } : {}) } })
       if (this.db.analysis(id)?.status === 'cancelled') return
       if (result.code !== 0) throw new Error(result.output.trim().slice(-4000) || 'Codex 分析失败')
       this.addLog(id, 'validate', 'info', 'Codex 已结束，正在读取并校验结构化结果', { progress: 92, message: '正在校验分析结果' })

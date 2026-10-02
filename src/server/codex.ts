@@ -3,6 +3,16 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { CodexStatus } from '../shared/types'
 
+export const DEFAULT_CODEX_MODEL = 'gpt-5.6-sol'
+export const DEFAULT_CODEX_REASONING_EFFORT = 'medium'
+
+export function resolveCodexAnalysisConfig(environment: NodeJS.ProcessEnv = process.env) {
+  return {
+    model: environment.SVD_CODEX_MODEL?.trim() || DEFAULT_CODEX_MODEL,
+    reasoningEffort: environment.SVD_CODEX_REASONING_EFFORT?.trim().toLowerCase() || DEFAULT_CODEX_REASONING_EFFORT,
+  }
+}
+
 const ANSI_OSC = /\u001B\][^\u0007]*(?:\u0007|\u001B\\)/g
 const ANSI_CSI = /(?:\u001B\[|\u009B)[0-?]*[ -/]*[@-~]/g
 const CONTROL_CHARACTERS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g
@@ -32,10 +42,14 @@ function run(command: string, args: string[], environment: NodeJS.ProcessEnv, ti
 export class CodexService {
   readonly command = process.env.SVD_CODEX_BIN || 'codex'
   readonly home = path.join(process.env.SVD_CONFIG_DIR || '/config', 'codex-home')
+  readonly analysisConfig = resolveCodexAnalysisConfig()
   private loginProcess?: ChildProcessWithoutNullStreams
   private loginOutput = ''
   constructor(private changed: () => void) {}
   environment() { return { ...process.env, HOME: this.home, CODEX_HOME: path.join(this.home, '.codex') } }
+  analysisArguments(outputDirectory: string, prompt: string) {
+    return ['--model', this.analysisConfig.model, '--config', `model_reasoning_effort=${JSON.stringify(this.analysisConfig.reasoningEffort)}`, '--ask-for-approval', 'never', '--sandbox', 'danger-full-access', '--cd', outputDirectory, 'exec', '--json', '--ephemeral', '--skip-git-repo-check', prompt]
+  }
   async initialize() {
     await mkdir(path.join(this.home, '.codex'), { recursive: true })
     const config = path.join(this.home, '.codex', 'config.toml')

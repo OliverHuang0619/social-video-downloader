@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { buildFormatArgs, detectPlatform, formatsFromYtDlp, normalizeUrls, sanitizeFilename } from '../src/shared/core'
 import { buildOutputTemplate, DownloadQueue, parseDownloadOutput } from '../src/main/queue'
 import { mediaFromGalleryDlLine } from '../src/main/media'
-import { cleanCodexOutput, parseCodexLoginOutput } from '../src/server/codex'
+import { CodexService, cleanCodexOutput, parseCodexLoginOutput, resolveCodexAnalysisConfig } from '../src/server/codex'
 import { executeAnalysisProcess, parseCodexProgressLine } from '../src/server/analysis'
 import type { DownloadOptions, MediaItem } from '../src/shared/types'
 
@@ -41,6 +41,18 @@ describe('Codex 设备登录输出', () => {
 })
 
 describe('Codex 分析进度输出', () => {
+  it('默认固定使用 GPT-5.6 Sol 和 medium 推理强度', () => {
+    expect(resolveCodexAnalysisConfig({})).toEqual({ model: 'gpt-5.6-sol', reasoningEffort: 'medium' })
+    const codex = new CodexService(() => undefined)
+    expect(codex.analysisArguments('/config/analysis/example', 'analyze manifest')).toEqual([
+      '--model', 'gpt-5.6-sol', '--config', 'model_reasoning_effort="medium"', '--ask-for-approval', 'never', '--sandbox', 'danger-full-access', '--cd', '/config/analysis/example', 'exec', '--json', '--ephemeral', '--skip-git-repo-check', 'analyze manifest',
+    ])
+  })
+
+  it('允许通过环境变量覆盖分析模型和推理强度', () => {
+    expect(resolveCodexAnalysisConfig({ SVD_CODEX_MODEL: 'gpt-6-sol', SVD_CODEX_REASONING_EFFORT: 'HIGH' })).toEqual({ model: 'gpt-6-sol', reasoningEffort: 'high' })
+  })
+
   it('关闭子进程标准输入，避免 Codex 等待额外输入', async () => {
     const result = await executeAnalysisProcess(process.execPath, ['-e', "process.stdin.resume(); process.stdin.on('end', () => console.log('stdin-closed'))"], { timeout: 1000 })
     expect(result).toMatchObject({ code: 0 })

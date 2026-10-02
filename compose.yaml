@@ -14,6 +14,8 @@ services:
       SVD_BROWSER_MODE: "${SVD_BROWSER_MODE:-container}"
       SVD_BROWSER_CDP: "${SVD_BROWSER_CDP:-http://browser:9222}"
       SVD_BROWSER_TOKEN_FILE: /config/local-browser.token
+      SVD_CODEX_MODEL: "${SVD_CODEX_MODEL:-gpt-5.6-sol}"
+      SVD_CODEX_REASONING_EFFORT: "${SVD_CODEX_REASONING_EFFORT:-medium}"
       TZ: "${TZ:-Asia/Shanghai}"
     extra_hosts:
       - "host.docker.internal:host-gateway"

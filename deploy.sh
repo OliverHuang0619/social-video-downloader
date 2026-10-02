@@ -21,6 +21,8 @@ Social Video 工作台部署脚本
   PORT                   监听端口，默认 3000
   SVD_SECURE_COOKIE      HTTPS 反向代理后设为 true
   SVD_ADMIN_PASSWORD     首次部署时使用的管理员密码；未设置则交互输入
+  SVD_CODEX_MODEL        视频分析模型，默认 gpt-5.6-sol
+  SVD_CODEX_REASONING_EFFORT 视频分析推理强度，默认 medium
   DEPLOY_HEALTH_TIMEOUT  健康检查等待秒数，默认 240
   LOCAL_BROWSER_BIN      本地 Chrome/Chromium 可执行文件路径
   LOCAL_BROWSER_CDP_PORT 本地 Chrome 调试端口，默认 9222

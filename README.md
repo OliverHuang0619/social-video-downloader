@@ -73,6 +73,8 @@ BIND_ADDRESS=0.0.0.0 docker compose up -d
 
 进入“设置”，点击“设备代码登录”，按页面输出的地址与一次性代码完成 ChatGPT 登录。设备代码登录需要先在 ChatGPT 安全设置中启用；登录缓存保存在 `config/codex-home/.codex`。官方也支持先在可信机器登录后复制 `auth.json` 到无头环境。[OpenAI Codex 认证说明](https://learn.chatgpt.com/docs/auth)
 
+视频分析默认固定使用 `gpt-5.6-sol` 和 `medium` 推理强度，避免 Codex CLI 的内置默认值升级后改变分析行为。如需要临时覆盖，可在部署时设置 `SVD_CODEX_MODEL` 和 `SVD_CODEX_REASONING_EFFORT`。
+
 ### 首次登录抖音
 
 进入“设置”，先打开“远程浏览器”，再点击“登录抖音”并在远程 Chromium 中扫码。登录态保存在 `config/douyin-profile`。遇到验证码、账号验证或风险控制时，任务会暂停等待人工处理，不会尝试绕过。
