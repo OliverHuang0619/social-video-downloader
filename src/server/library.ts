@@ -1,5 +1,6 @@
+import { spawn } from 'node:child_process'
 import { createReadStream } from 'node:fs'
-import { readdir, realpath, stat } from 'node:fs/promises'
+import { mkdir, readdir, realpath, rename, rm, stat } from 'node:fs/promises'
 import type { ServerResponse } from 'node:http'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -11,6 +12,9 @@ const VIDEO_MIME: Record<string, string> = { '.mp4': 'video/mp4', '.m4v': 'video
 
 export class LibraryService {
   private roots: string[]
+  private thumbnailJobs = new Map<string, Promise<string>>()
+  private thumbnailActive = 0
+  private thumbnailWaiters: Array<() => void> = []
   constructor(private db: AppDatabase) { this.roots = [process.env.SVD_OUTPUT_DIR || '/downloads', process.env.SVD_IMPORT_DIR || '/imports'].map(value => path.resolve(value)) }
   private async allowed(file: string) {
     const target = await realpath(file)
@@ -48,6 +52,44 @@ export class LibraryService {
         this.db.saveDownload(job)
       } catch { /* a partially written path will be retried on the next queue event */ }
     }
+  }
+  private async withThumbnailSlot<T>(work: () => Promise<T>) {
+    if (this.thumbnailActive >= 2) await new Promise<void>(resolve => this.thumbnailWaiters.push(resolve))
+    this.thumbnailActive++
+    try { return await work() }
+    finally { this.thumbnailActive--; this.thumbnailWaiters.shift()?.() }
+  }
+  private async thumbnailFile(id: string) {
+    const existing = this.thumbnailJobs.get(id); if (existing) return existing
+    const job = this.withThumbnailSlot(async () => {
+      const asset = this.db.asset(id); if (!asset) throw Object.assign(new Error('视频不存在'), { statusCode: 404 })
+      const file = await this.allowed(asset.file); if (!file) throw Object.assign(new Error('不允许访问该文件'), { statusCode: 403 })
+      const directory = path.join(process.env.SVD_CONFIG_DIR || '/config', 'thumbnails')
+      const output = path.join(directory, `${id}.jpg`)
+      const [sourceInfo, thumbnailInfo] = await Promise.all([stat(file), stat(output).catch(() => undefined)])
+      if (thumbnailInfo && thumbnailInfo.mtimeMs >= sourceInfo.mtimeMs) return output
+      await mkdir(directory, { recursive: true })
+      const temporary = path.join(directory, `${id}.${randomUUID()}.tmp.jpg`)
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const child = spawn(process.env.SVD_FFMPEG_BIN || 'ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', file, '-frames:v', '1', '-vf', 'scale=640:-2:force_original_aspect_ratio=decrease', '-q:v', '3', temporary], { stdio: ['ignore', 'ignore', 'pipe'] })
+          let error = ''; child.stderr.on('data', chunk => { if (error.length < 4_000) error += String(chunk) })
+          child.once('error', reject); child.once('close', code => code === 0 ? resolve() : reject(new Error(error.trim() || `ffmpeg 退出码 ${code}`)))
+        })
+        await rename(temporary, output)
+        return output
+      } catch (error) {
+        await rm(temporary, { force: true })
+        throw Object.assign(new Error(`无法读取视频首帧：${error instanceof Error ? error.message : String(error)}`), { statusCode: 422 })
+      }
+    }).finally(() => this.thumbnailJobs.delete(id))
+    this.thumbnailJobs.set(id, job)
+    return job
+  }
+  async thumbnail(id: string, response: ServerResponse) {
+    const file = await this.thumbnailFile(id), info = await stat(file)
+    response.writeHead(200, { 'content-type': 'image/jpeg', 'content-length': info.size, 'cache-control': 'private, max-age=86400' })
+    createReadStream(file).pipe(response)
   }
   async stream(id: string, requestRange: string | undefined, response: ServerResponse, attachment = false) {
     const asset = this.db.asset(id); if (!asset) throw Object.assign(new Error('视频不存在'), { statusCode: 404 })

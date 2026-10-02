@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { buildFormatArgs, detectPlatform, formatsFromYtDlp, normalizeUrls, sanitizeFilename } from '../src/shared/core'
 import { buildOutputTemplate, DownloadQueue, parseDownloadOutput } from '../src/main/queue'
 import { mediaFromGalleryDlLine } from '../src/main/media'
+import { cleanCodexOutput, parseCodexLoginOutput } from '../src/server/codex'
 import type { DownloadOptions, MediaItem } from '../src/shared/types'
 
 const options: DownloadOptions = { mode: 'video', quality: '1080', container: 'mp4', audioFormat: 'mp3', audioBitrate: '192', outputRoot: '/tmp', cookieSource: 'none', quickTimeCompatible: true }
@@ -30,6 +31,12 @@ describe('核心工具', () => {
     const item = { platform: 'instagram', selectedFormatId: 'best', formats: [{ id: 'best', selector: 'best', kind: 'video-audio', ext: 'mp4', quickTimeCompatible: false }] } as MediaItem
     expect(buildFormatArgs(options, item)).toEqual([])
   })
+})
+
+describe('Codex 设备登录输出', () => {
+  const raw = '\u001b[90mWelcome to Codex\u001b[0m\nOpen this link:\n\u001b[94mhttps://auth.openai.com/codex/device\u001b[0m\nEnter this one-time code (expires in 15 minutes)\n\u001b[94mA6FG-GHB4U\u001b[0m'
+  it('移除终端 ANSI 控制码', () => expect(cleanCodexOutput(raw)).not.toContain('\u001b'))
+  it('提取可点击链接和可复制登录码', () => expect(parseCodexLoginOutput(raw)).toMatchObject({ loginUrl: 'https://auth.openai.com/codex/device', loginCode: 'A6FG-GHB4U' }))
 })
 
 describe('下载队列', () => {

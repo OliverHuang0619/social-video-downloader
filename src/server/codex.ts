@@ -3,6 +3,22 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { CodexStatus } from '../shared/types'
 
+const ANSI_OSC = /\u001B\][^\u0007]*(?:\u0007|\u001B\\)/g
+const ANSI_CSI = /(?:\u001B\[|\u009B)[0-?]*[ -/]*[@-~]/g
+const CONTROL_CHARACTERS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g
+
+export function cleanCodexOutput(value: string) {
+  return value.replace(ANSI_OSC, '').replace(ANSI_CSI, '').replace(/\r/g, '').replace(CONTROL_CHARACTERS, '').trim()
+}
+
+export function parseCodexLoginOutput(value: string) {
+  const output = cleanCodexOutput(value)
+  const loginUrl = output.match(/https:\/\/auth\.openai\.com\/codex\/device(?:\?[^\s]*)?/i)?.[0]
+  const loginCode = output.match(/(?:one-time|device) code[^\n]*\n\s*([A-Z0-9]{4,8}-[A-Z0-9]{4,8})/i)?.[1]
+    || output.match(/\b([A-Z0-9]{4,8}-[A-Z0-9]{4,8})\b/)?.[1]
+  return { output, loginUrl, loginCode }
+}
+
 function run(command: string, args: string[], environment: NodeJS.ProcessEnv, timeout = 15_000) {
   return new Promise<{ code: number | null; output: string }>((resolve) => {
     const child = spawn(command, args, { env: environment, windowsHide: true }); let output = ''
@@ -30,7 +46,8 @@ export class CodexService {
     const version = await run(this.command, ['--version'], this.environment())
     if (version.code !== 0) return { available: false, authenticated: false, busy: Boolean(this.loginProcess), message: '未找到可用的 Codex CLI' }
     const login = await run(this.command, ['login', 'status'], this.environment())
-    return { available: true, authenticated: login.code === 0, busy: Boolean(this.loginProcess), message: login.code === 0 ? login.output.trim() || 'Codex 已登录' : 'Codex 尚未登录', loginOutput: this.loginOutput || undefined }
+    const loginDetails = parseCodexLoginOutput(this.loginOutput)
+    return { available: true, authenticated: login.code === 0, busy: Boolean(this.loginProcess), message: login.code === 0 ? cleanCodexOutput(login.output) || 'Codex 已登录' : 'Codex 尚未登录', loginOutput: loginDetails.output || undefined, loginUrl: loginDetails.loginUrl, loginCode: loginDetails.loginCode }
   }
   login() {
     if (this.loginProcess) return

@@ -125,7 +125,7 @@ export interface PublishBatch {
 }
 
 export interface AuthStatus { authenticated: boolean; csrfToken?: string }
-export interface CodexStatus { available: boolean; authenticated: boolean; busy: boolean; message: string; loginOutput?: string }
+export interface CodexStatus { available: boolean; authenticated: boolean; busy: boolean; message: string; loginOutput?: string; loginUrl?: string; loginCode?: string }
 export interface BrowserStatus { ready: boolean; loginStatus: 'unknown' | 'ready' | 'needs_login' | 'needs_attention'; message: string; remoteUrl: string; manageUrl: string }
 
 export interface ToolInfo { name: 'yt-dlp' | 'gallery-dl' | 'ffmpeg'; available: boolean; path?: string; version?: string; managed: boolean; error?: string }
