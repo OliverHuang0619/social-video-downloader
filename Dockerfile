@@ -27,12 +27,16 @@ RUN apt-get -o Acquire::Retries=3 update \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /app/dist /downloads /imports /config \
     && chown -R node:node /app /downloads /config
-ARG CODEX_VERSION=0.130.0
+ARG CODEX_VERSION=0.160.0
 ARG TARGETARCH
 RUN codex_arch="${TARGETARCH:-$(dpkg --print-architecture)}" \
     && if [ "$codex_arch" = "amd64" ]; then codex_arch="x64"; fi \
+    && npm install -g "@openai/codex@${CODEX_VERSION}" \
     && npm install -g "@openai/codex-linux-${codex_arch}@npm:@openai/codex@${CODEX_VERSION}-linux-${codex_arch}" \
     && codex --version
+RUN apt-get -o Acquire::Retries=3 update \
+    && apt-get install -y --no-install-recommends ripgrep \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev

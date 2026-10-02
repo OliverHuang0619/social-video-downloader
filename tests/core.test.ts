@@ -3,7 +3,7 @@ import { buildFormatArgs, detectPlatform, formatsFromYtDlp, normalizeUrls, sanit
 import { buildOutputTemplate, DownloadQueue, parseDownloadOutput } from '../src/main/queue'
 import { mediaFromGalleryDlLine } from '../src/main/media'
 import { cleanCodexOutput, parseCodexLoginOutput } from '../src/server/codex'
-import { parseCodexProgressLine } from '../src/server/analysis'
+import { executeAnalysisProcess, parseCodexProgressLine } from '../src/server/analysis'
 import type { DownloadOptions, MediaItem } from '../src/shared/types'
 
 const options: DownloadOptions = { mode: 'video', quality: '1080', container: 'mp4', audioFormat: 'mp3', audioBitrate: '192', outputRoot: '/tmp', cookieSource: 'none', quickTimeCompatible: true }
@@ -41,6 +41,12 @@ describe('Codex 设备登录输出', () => {
 })
 
 describe('Codex 分析进度输出', () => {
+  it('关闭子进程标准输入，避免 Codex 等待额外输入', async () => {
+    const result = await executeAnalysisProcess(process.execPath, ['-e', "process.stdin.resume(); process.stdin.on('end', () => console.log('stdin-closed'))"], { timeout: 1000 })
+    expect(result).toMatchObject({ code: 0 })
+    expect(result.output).toContain('stdin-closed')
+  })
+
   it('把 JSONL 命令事件转换为可读信息', () => {
     const result = parseCodexProgressLine(JSON.stringify({ type: 'item.started', item: { type: 'command_execution', command: 'python inspect.py manifest.json' } }))
     expect(result).toMatchObject({ level: 'command', message: '正在检查证据：python inspect.py manifest.json' })

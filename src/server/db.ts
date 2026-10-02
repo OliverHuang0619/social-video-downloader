@@ -103,6 +103,7 @@ export class AppDatabase {
     const detail = JSON.parse(String(row.detail_json || '{}')) as Partial<Pick<AnalysisJob, 'currentItem' | 'processedItems' | 'totalItems' | 'logs'>>
     return { id: String(row.id), status: row.status as AnalysisJob['status'], assetIds: JSON.parse(String(row.asset_ids)), progress: Number(row.progress), message: String(row.message), currentItem: detail.currentItem, processedItems: Number(detail.processedItems || 0), totalItems: Number(detail.totalItems || JSON.parse(String(row.asset_ids)).length), logs: Array.isArray(detail.logs) ? detail.logs : [], error: row.error ? String(row.error) : undefined, createdAt: String(row.created_at), updatedAt: String(row.updated_at) }
   }
+  analysisOutputDir(id: string) { return (this.sqlite.prepare('SELECT output_dir FROM analysis_jobs WHERE id=?').get(id) as { output_dir: string } | undefined)?.output_dir }
   analyses() { return (this.sqlite.prepare('SELECT id FROM analysis_jobs ORDER BY created_at DESC').all() as { id: string }[]).map(row => this.analysis(row.id)!) }
 
   createPublishBatch(batch: PublishBatch) {
