@@ -114,7 +114,7 @@ export class PublisherService {
     let succeeded = false
     await this.execute(['publish', payloadPath], event => {
       const name = String(event.event)
-      if (['launching', 'uploading', 'scheduling', 'submitting', 'published', 'scheduled'].includes(name)) {
+      if (['launching', 'uploading', 'scheduling', 'waiting_covers', 'submitting', 'published', 'scheduled'].includes(name)) {
         this.db.updatePublishJob(job.id, name as PublishJob['status'], { screenshot: event.screenshot ? String(event.screenshot) : undefined })
         succeeded = name === 'published' || name === 'scheduled'
         if (succeeded) this.db.setAssetState(job.assetId, 'processed')

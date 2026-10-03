@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
-ACTIVE_STATES = {"launching", "uploading", "scheduling", "submitting", "running"}
+ACTIVE_STATES = {"launching", "uploading", "scheduling", "waiting_covers", "submitting", "running"}
 PENDING_STATES = ACTIVE_STATES | {"queued", "waiting_local"}
 BATCH_COOLDOWN_SECONDS = 30
 
@@ -340,7 +340,7 @@ class DouyinBrowserBridge:
                         if name == "error":
                             error_event = event
                             continue
-                        if name in {"launching", "uploading", "scheduling", "submitting", "published", "scheduled"}:
+                        if name in {"launching", "uploading", "scheduling", "waiting_covers", "submitting", "published", "scheduled"}:
                             extra = {key: value for key, value in event.items() if key != "event"}
                             self._set_job(batch_id, job, name, **extra)
                     stderr = process.stderr.read().strip() if process.stderr else ""
