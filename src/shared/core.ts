@@ -24,7 +24,7 @@ export type LibraryStateFilter = ProcessingState | 'awaiting-analysis' | 'all'
 export function filterMediaAssets(assets: MediaAsset[], state: LibraryStateFilter, category: string, query: string): MediaAsset[] {
   const needle = query.toLocaleLowerCase()
   return assets.filter(asset =>
-    (state === 'all' || (state === 'awaiting-analysis' ? !asset.analysis : asset.processingState === state)) &&
+    (state === 'all' || (state === 'awaiting-analysis' ? !asset.analysis : asset.processingState === state && (state !== 'unprocessed' || Boolean(asset.analysis)))) &&
     (category === 'all' || asset.analysis?.category === category) &&
     (!needle || [asset.filename, asset.analysis?.title, asset.analysis?.englishTitle, asset.analysis?.summary, ...(asset.analysis?.keyTopics || [])].some(value => value?.toLocaleLowerCase().includes(needle)))
   )

@@ -23,6 +23,7 @@ Import `filterMediaAssets` and `MediaAsset`, create analyzed and unanalyzed fixt
 ```ts
 expect(filterMediaAssets(assets, 'awaiting-analysis', 'all', '')).toEqual([unprocessedAwaiting, processedAwaiting])
 expect(filterMediaAssets(assets, 'processed', 'all', '')).toEqual([processedAwaiting, processedAnalyzed])
+expect(filterMediaAssets(assets, 'unprocessed', 'all', '')).toEqual([unprocessedAnalyzed])
 ```
 
 - [ ] **Step 2: Run the focused test and verify it fails**

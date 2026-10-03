@@ -48,12 +48,14 @@ describe('媒体库筛选', () => {
 
   it('等待分析筛选包含所有尚无分析结果的视频，不受处理状态影响', () => {
     const unprocessedAwaiting = asset('unprocessed-awaiting', 'unprocessed', false)
+    const unprocessedAnalyzed = asset('unprocessed-analyzed', 'unprocessed', true)
     const processedAwaiting = asset('processed-awaiting', 'processed', false)
     const processedAnalyzed = asset('processed-analyzed', 'processed', true)
-    const assets = [unprocessedAwaiting, processedAwaiting, processedAnalyzed]
+    const assets = [unprocessedAwaiting, unprocessedAnalyzed, processedAwaiting, processedAnalyzed]
 
     expect(filterMediaAssets(assets, 'awaiting-analysis', 'all', '')).toEqual([unprocessedAwaiting, processedAwaiting])
     expect(filterMediaAssets(assets, 'processed', 'all', '')).toEqual([processedAwaiting, processedAnalyzed])
+    expect(filterMediaAssets(assets, 'unprocessed', 'all', '')).toEqual([unprocessedAnalyzed])
   })
 })
 
