@@ -1,4 +1,4 @@
-import type { DownloadOptions, MediaFormat, MediaItem, Platform } from './types'
+import type { DownloadOptions, MediaAsset, MediaFormat, MediaItem, Platform, ProcessingState } from './types'
 
 const invalidFilename = /[<>:"/\\|?*\u0000-\u001F]/g
 
@@ -17,6 +17,17 @@ export function normalizeUrls(input: string | string[]): string[] {
     if (!seen.has(url)) { seen.add(url); result.push(url) }
   }
   return result
+}
+
+export type LibraryStateFilter = ProcessingState | 'awaiting-analysis' | 'all'
+
+export function filterMediaAssets(assets: MediaAsset[], state: LibraryStateFilter, category: string, query: string): MediaAsset[] {
+  const needle = query.toLocaleLowerCase()
+  return assets.filter(asset =>
+    (state === 'all' || (state === 'awaiting-analysis' ? !asset.analysis : asset.processingState === state)) &&
+    (category === 'all' || asset.analysis?.category === category) &&
+    (!needle || [asset.filename, asset.analysis?.title, asset.analysis?.englishTitle, asset.analysis?.summary, ...(asset.analysis?.keyTopics || [])].some(value => value?.toLocaleLowerCase().includes(needle)))
+  )
 }
 
 export function detectPlatform(url: string): Platform {

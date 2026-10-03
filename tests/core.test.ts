@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { buildFormatArgs, detectPlatform, formatsFromYtDlp, normalizeUrls, sanitizeFilename } from '../src/shared/core'
+import { buildFormatArgs, detectPlatform, filterMediaAssets, formatsFromYtDlp, normalizeUrls, sanitizeFilename } from '../src/shared/core'
 import { buildOutputTemplate, DownloadQueue, parseDownloadOutput } from '../src/main/queue'
 import { classifyError, mediaFromGalleryDlLine, youtubeAttemptSources, youtubeCookieArgs } from '../src/main/media'
 import { CodexService, cleanCodexOutput, parseCodexLoginOutput, parseCodexRateLimits, resolveCodexAnalysisConfig } from '../src/server/codex'
 import { executeAnalysisProcess, parseCodexProgressLine } from '../src/server/analysis'
 import { hasPlatformLogin, parseManualCookies, serializeNetscapeCookies } from '../src/server/youtube-cookies'
-import type { DownloadOptions, MediaItem } from '../src/shared/types'
+import type { DownloadOptions, MediaAsset, MediaItem } from '../src/shared/types'
 
 const options: DownloadOptions = { mode: 'video', quality: '1080', container: 'mp4', audioFormat: 'mp3', audioBitrate: '192', outputRoot: '/tmp', cookieSource: 'none', quickTimeCompatible: true }
 describe('核心工具', () => {
@@ -32,6 +32,28 @@ describe('核心工具', () => {
   it('Instagram 扫描直链不再传递无意义的格式选择', () => {
     const item = { platform: 'instagram', selectedFormatId: 'best', formats: [{ id: 'best', selector: 'best', kind: 'video-audio', ext: 'mp4', quickTimeCompatible: false }] } as MediaItem
     expect(buildFormatArgs(options, item)).toEqual([])
+  })
+})
+
+describe('媒体库筛选', () => {
+  const asset = (id: string, processingState: MediaAsset['processingState'], analyzed: boolean): MediaAsset => ({
+    id,
+    file: `/downloads/${id}.mp4`,
+    filename: `${id}.mp4`,
+    processingState,
+    analysis: analyzed ? { title: id, englishTitle: id, category: '英语', keyTopics: [], summary: id, confidence: 'high', evidenceNote: id } : undefined,
+    createdAt: '2026-10-03T00:00:00.000Z',
+    updatedAt: '2026-10-03T00:00:00.000Z'
+  })
+
+  it('等待分析筛选包含所有尚无分析结果的视频，不受处理状态影响', () => {
+    const unprocessedAwaiting = asset('unprocessed-awaiting', 'unprocessed', false)
+    const processedAwaiting = asset('processed-awaiting', 'processed', false)
+    const processedAnalyzed = asset('processed-analyzed', 'processed', true)
+    const assets = [unprocessedAwaiting, processedAwaiting, processedAnalyzed]
+
+    expect(filterMediaAssets(assets, 'awaiting-analysis', 'all', '')).toEqual([unprocessedAwaiting, processedAwaiting])
+    expect(filterMediaAssets(assets, 'processed', 'all', '')).toEqual([processedAwaiting, processedAnalyzed])
   })
 })
 
