@@ -1,47 +1,52 @@
+/* 分析任务详情与 Codex 运行状态 */
+
 .analysis-summary {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 18px;
-  color: #718097;
-  font-size: 11px;
+  gap: 6px 16px;
+  color: var(--ink-3);
+  font-family: var(--font-data);
+  font-size: 11.5px;
 }
 
 .analysis-current {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #a7b8d2 !important;
+  color: var(--ink-2) !important;
+  font-family: var(--font-data);
+  font-size: 12px !important;
 }
 
 .analysis-details {
-  margin: 12px 0;
+  margin: 10px 0;
 }
 
 .analysis-details summary {
   cursor: pointer;
-  color: #8eb5ff;
-  font-size: 12px;
+  color: var(--run);
+  font-size: 12.5px;
   user-select: none;
 }
 
 .analysis-log {
-  margin-top: 9px;
+  margin-top: 8px;
   max-height: 320px;
   overflow: auto;
-  border: 1px solid #1e2c40;
-  border-radius: 10px;
-  background: #080d16;
-  padding: 7px;
-  font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  padding: 6px;
+  font: 11.5px/1.55 var(--font-data);
 }
 
 .analysis-log-line {
   display: grid;
   grid-template-columns: 72px 52px minmax(0, 1fr);
   gap: 8px;
-  padding: 5px 6px;
-  border-bottom: 1px solid #172234;
-  color: #aab8cc;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-2);
   overflow-wrap: anywhere;
 }
 
@@ -50,28 +55,28 @@
 }
 
 .analysis-log-line time {
-  color: #596a84;
+  color: var(--ink-3);
 }
 
 .analysis-stage {
-  color: #78a9ff;
+  color: var(--run);
 }
 
 .analysis-log-line.command > span:last-child {
-  color: #82c6f1;
+  color: #8fc6f0;
 }
 
 .analysis-log-line.result > span:last-child {
-  color: #78d7b1;
+  color: var(--ok);
 }
 
 .analysis-log-line.error > span:last-child {
-  color: #ff8fa0;
+  color: var(--bad);
 }
 
 .analysis-log-empty {
   padding: 12px;
-  color: #5d6b81;
+  color: var(--ink-3);
 }
 
 .codex-settings {
@@ -80,7 +85,7 @@
 
 .codex-runtime {
   display: grid;
-  gap: 12px;
+  gap: 10px;
   margin: 14px 0;
 }
 
@@ -92,42 +97,49 @@
 
 .codex-runtime-grid > div,
 .codex-usage {
-  border: 1px solid #26364d;
-  border-radius: 10px;
-  background: #080d16;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
   padding: 10px 12px;
 }
 
 .codex-runtime-grid span,
 .codex-usage span,
 .codex-usage small {
-  color: #718097;
-  font-size: 11px;
+  color: var(--ink-3);
+  font-size: 11.5px;
 }
 
 .codex-runtime-grid strong {
   display: block;
-  margin-top: 4px;
-  color: #dce8ff;
+  margin-top: 3px;
+  color: var(--ink);
+  font-family: var(--font-data);
   font-size: 13px;
+  font-weight: 600;
+}
+
+.codex-usage strong {
+  font-family: var(--font-data);
+  font-weight: 600;
 }
 
 .codex-usage-bar {
-  height: 7px;
-  margin: 9px 0 7px;
+  height: 5px;
+  margin: 8px 0 6px;
   overflow: hidden;
   border-radius: 999px;
-  background: #1a2433;
+  background: var(--inset);
 }
 
 .codex-usage-bar i {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, #36c7ed, #6977ff);
+  background: var(--accent);
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1000px) {
   .codex-settings {
     grid-column: auto;
   }

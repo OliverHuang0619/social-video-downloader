@@ -20,22 +20,69 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : S
 const formatDuration = (value?: number) => value ? `${Math.floor(value / 60)}:${String(Math.floor(value % 60)).padStart(2, '0')}` : '—'
 const formatGroups: Record<MediaFormatKind, string> = { 'video-audio': '视频与音频', 'video-only': '仅视频', 'audio-only': '仅音频' }
 const formatLabel = (format: MediaFormat) => `${format.height ? `${format.height}p` : format.bitrate ? `${Math.round(format.bitrate)}kbps` : '音频'} · ${format.ext.toUpperCase()}${format.quickTimeCompatible ? ' · QuickTime' : ''}`
+const taskNames: Record<string, string> = { queued: '等待中', downloading: '下载中', skipped: '已跳过', preparing: '准备媒体', analyzing: '分析中', completed: '已完成', failed: '失败', cancelled: '已取消', waiting_local: '本地等待', running: '执行中', launching: '启动浏览器', uploading: '上传中', scheduling: '设置排期', waiting_covers: '等待横竖封面', submitting: '提交中', published: '已发布', scheduled: '已排期', needs_login: '需要登录', needs_attention: '需要检查', interrupted: '已中断', partial: '部分完成' }
+const confidenceNames: Record<string, string> = { high: '高', medium: '中', low: '低' }
+const stateNames: Record<LibraryStateFilter, string> = { unprocessed: '未处理', processed: '已处理', 'awaiting-analysis': '等待分析', all: '全部' }
+const stateOrder: LibraryStateFilter[] = ['unprocessed', 'processed', 'awaiting-analysis', 'all']
+
+/* ---------------------------------------------------------------- toast */
+
+type Toast = { id: number; message: string; tone: 'ok' | 'bad' }
+const toastListeners = new Set<(toast: Toast) => void>()
+let toastSequence = 0
+function toast(message: string, tone: Toast['tone'] = 'ok') { const item = { id: ++toastSequence, message, tone }; toastListeners.forEach(listener => listener(item)) }
+async function copyText(value: string, label: string) {
+  try { await navigator.clipboard.writeText(value); toast(`已复制${label}`) } catch { toast('复制失败，请手动选择文本', 'bad') }
+}
+function Toaster() {
+  const [items, setItems] = useState<Toast[]>([])
+  useEffect(() => {
+    const listener = (item: Toast) => { setItems(current => [...current.slice(-2), item]); window.setTimeout(() => setItems(current => current.filter(value => value.id !== item.id)), 2400) }
+    toastListeners.add(listener)
+    return () => { toastListeners.delete(listener) }
+  }, [])
+  return <div className="toaster" aria-live="polite">{items.map(item => <div className={`toast ${item.tone}`} key={item.id}>{item.message}</div>)}</div>
+}
+
+/* ---------------------------------------------------------------- login */
 
 function Login({ onLogin }: { onLogin: () => void }) {
   const [password, setPassword] = useState(''), [message, setMessage] = useState('')
   const submit = async (event: React.FormEvent) => { event.preventDefault(); setMessage(''); try { await api.auth.login(password); onLogin() } catch (error) { setMessage(errorText(error)) } }
-  return <main className="login-page"><form className="login-card" onSubmit={submit}><div className="brand-mark">▶</div><h1>Social Video 工作台</h1><p>下载、分析、审核与抖音发布</p><label>管理员密码<input type="password" autoFocus value={password} onChange={event => setPassword(event.target.value)} /></label><button className="primary" type="submit">登录</button>{message ? <p className="error">{message}</p> : null}</form></main>
+  return <main className="login-page">
+    <form className="login-card" onSubmit={submit}>
+      <div className="brand-mark">▶</div>
+      <h1>Social Video 工作台</h1>
+      <p>把视频从下载一路送到抖音发布</p>
+      <div className="stage-list" aria-hidden="true"><span>下载</span><i /><span>分析</span><i /><span>审核</span><i /><span>发布</span></div>
+      <label>管理员密码<input type="password" autoFocus value={password} onChange={event => setPassword(event.target.value)} /></label>
+      <button className="primary wide" type="submit">登录</button>
+      {message ? <p className="error">{message}</p> : null}
+    </form>
+  </main>
 }
 
+/* ------------------------------------------------------------- download */
+
 const MediaResult = memo(function MediaResult({ item, toggle, format }: { item: MediaItem; toggle: (id: string) => void; format: (id: string, value: string) => void }) {
-  return <article className={`download-item ${item.selected ? 'selected' : ''}`}><input type="checkbox" checked={item.selected} onChange={() => toggle(item.id)} />{item.thumbnail ? <img src={item.thumbnail} alt="" /> : <div className="placeholder">▶</div>}<div><strong>{item.title}</strong><small>{item.uploader || '未知作者'} · {formatDuration(item.duration)}</small>{item.formats?.length ? <select value={item.selectedFormatId} onChange={event => format(item.id, event.target.value)}>{(['video-audio', 'video-only', 'audio-only'] as MediaFormatKind[]).map(kind => { const list = item.formats!.filter(value => value.kind === kind); return list.length ? <optgroup key={kind} label={formatGroups[kind]}>{list.map(value => <option key={value.id} value={value.id}>{formatLabel(value)}</option>)}</optgroup> : null })}</select> : null}</div></article>
+  return <article className={`download-item ${item.selected ? 'selected' : ''}`}>
+    <input type="checkbox" checked={item.selected} onChange={() => toggle(item.id)} aria-label={`选择 ${item.title}`} />
+    {item.thumbnail ? <img src={item.thumbnail} alt="" /> : <div className="placeholder">▶</div>}
+    <div>
+      <strong title={item.title}>{item.title}</strong>
+      <small>{item.uploader || '未知作者'} · <span className="data">{formatDuration(item.duration)}</span></small>
+      {item.formats?.length ? <select value={item.selectedFormatId} onChange={event => format(item.id, event.target.value)} aria-label="下载格式">
+        {(['video-audio', 'video-only', 'audio-only'] as MediaFormatKind[]).map(kind => { const list = item.formats!.filter(value => value.kind === kind); return list.length ? <optgroup key={kind} label={formatGroups[kind]}>{list.map(value => <option key={value.id} value={value.id}>{formatLabel(value)}</option>)}</optgroup> : null })}
+      </select> : null}
+    </div>
+  </article>
 })
 
 const cookiePlatformNames: Record<CookiePlatform, string> = { youtube: 'YouTube', instagram: 'Instagram' }
 
-function CookieManager({ onUseFile }: { onUseFile: () => void }) {
+function CookieManager({ cookieSource, setCookieSource }: { cookieSource: 'none' | 'file'; setCookieSource: (value: 'none' | 'file') => void }) {
   const [status, setStatus] = useState<CookieManagerStatus | null>(null)
-  const [dialog, setDialog] = useState<'manual' | 'view'>()
+  const [dialog, setDialog] = useState<'manage' | 'view'>()
   const [platform, setPlatform] = useState<CookiePlatform>('youtube')
   const [contents, setContents] = useState('')
   const [view, setView] = useState<CookieFileView | null>(null)
@@ -48,70 +95,165 @@ function CookieManager({ onUseFile }: { onUseFile: () => void }) {
     return () => window.clearInterval(timer)
   }, [loadStatus, status?.runningPlatform])
   const update = async (target: CookiePlatform) => {
-    setMessage(''); onUseFile()
+    setMessage(''); setCookieSource('file')
     try { setStatus(await api.cookies.update(target)) } catch (error) { setMessage(errorText(error)) }
   }
   const submitManual = async () => {
     setMessage('')
-    try { setStatus(await api.cookies.manual(platform, contents)); onUseFile(); setContents(''); setDialog(undefined) } catch (error) { setMessage(errorText(error)) }
+    try { setStatus(await api.cookies.manual(platform, contents)); setCookieSource('file'); setContents(''); toast(`已保存 ${cookiePlatformNames[platform]} Cookie`) } catch (error) { setMessage(errorText(error)) }
   }
   const openView = async (reveal = false) => {
     setMessage('')
     try { setView(await api.cookies.view(reveal)); setDialog('view') } catch (error) { setMessage(errorText(error)) }
   }
+  const running = Boolean(status?.runningPlatform)
+  const chipTone = (value: CookiePlatform) => { const item = status?.platforms[value]; if (!item) return ''; if (item.running) return 'run'; if (item.status === 'error') return 'bad'; return item.cookieCount || item.status === 'ready' ? 'ok' : '' }
+  const chipText = (value: CookiePlatform) => { const item = status?.platforms[value]; if (!item) return '检查中'; if (item.running) return '登录中…'; if (item.status === 'error') return '出错'; return item.cookieCount ? `${item.cookieCount} 条` : '未保存' }
   return <>
-    <div className="cookie-controls">
-      <button type="button" disabled={Boolean(status?.runningPlatform)} onClick={() => void update('youtube')}>更新 YouTube</button>
-      <button type="button" disabled={Boolean(status?.runningPlatform)} onClick={() => void update('instagram')}>更新 Instagram</button>
-      <button type="button" disabled={Boolean(status?.runningPlatform)} onClick={() => { setMessage(''); setDialog('manual') }}>手动更新</button>
-      <button type="button" onClick={() => void openView()}>查看 Cookie</button>
+    <div className="cookie-row">
+      <label className="check"><input type="checkbox" checked={cookieSource === 'file'} onChange={event => setCookieSource(event.target.checked ? 'file' : 'none')} />使用已保存的登录 Cookie</label>
+      {(['youtube', 'instagram'] as CookiePlatform[]).map(value => <span className={`chip ${chipTone(value)}`} key={value} title={status?.platforms[value]?.message}>{cookiePlatformNames[value]} <em>{chipText(value)}</em></span>)}
+      <button type="button" className="ghost" onClick={() => { setMessage(''); setDialog('manage') }}>管理 Cookie</button>
     </div>
-    {status ? <div className="cookie-platform-status">{(['youtube', 'instagram'] as CookiePlatform[]).map(value => {
-      const item = status.platforms[value]
-      return <p className={item.status === 'error' ? 'error' : 'notice'} key={value}><strong>{cookiePlatformNames[value]}</strong>：{item.message}{item.updatedAt ? ` · ${new Date(item.updatedAt).toLocaleString()}` : ''}</p>
-    })}</div> : null}
-    {message ? <p className="error cookie-status">{message}</p> : null}
-    {dialog === 'manual' ? <div className="modal-bg" role="dialog" aria-modal="true" aria-label="手动更新 Cookie" onMouseDown={() => setDialog(undefined)}><div className="modal cookie-modal" onMouseDown={event => event.stopPropagation()}><h2>手动更新 Cookie</h2><label>平台<select value={platform} onChange={event => setPlatform(event.target.value as CookiePlatform)}><option value="youtube">YouTube</option><option value="instagram">Instagram</option></select></label><label>Cookie 内容<textarea rows={12} value={contents} onChange={event => setContents(event.target.value)} placeholder="可粘贴 Netscape cookies.txt、浏览器扩展导出的 JSON，或 Cookie: name=value; name2=value2" /></label><p className="muted">只会替换所选平台的 Cookie，另一个平台和其他域名的数据会保留。</p>{message ? <p className="error">{message}</p> : null}<div className="row end"><button onClick={() => setDialog(undefined)}>取消</button><button className="primary" disabled={!contents.trim()} onClick={() => void submitManual()}>保存 Cookie</button></div></div></div> : null}
-    {dialog === 'view' && view ? <div className="modal-bg" role="dialog" aria-modal="true" aria-label="查看 Cookie" onMouseDown={() => setDialog(undefined)}><div className="modal cookie-modal cookie-view" onMouseDown={event => event.stopPropagation()}><h2>查看 Cookie</h2><p className="warning">Cookie 可用于登录账号，请勿发送给其他人。默认只显示名称；仅在确有需要时显示完整值。</p>{view.raw ? <textarea rows={16} readOnly value={view.raw} /> : <div className="cookie-entry-list">{view.entries.length ? view.entries.map((entry, index) => <div className="cookie-entry" key={`${entry.domain}-${entry.path}-${entry.name}-${index}`}><strong>{entry.name}</strong><span>{entry.platform} · {entry.domain}</span><small>{entry.expires ? `到期：${new Date(entry.expires * 1000).toLocaleString()}` : '会话 Cookie'}{entry.httpOnly ? ' · HttpOnly' : ''}{entry.secure ? ' · Secure' : ''}</small></div>) : <p className="muted">当前没有 Cookie。</p>}</div>}<div className="row between"><button onClick={() => void openView(!view.raw)}>{view.raw ? '隐藏完整值' : '显示完整值'}</button><div className="row"><button disabled={!view.raw} onClick={() => view.raw && void navigator.clipboard.writeText(view.raw)}>复制完整文件</button><button onClick={() => setDialog(undefined)}>关闭</button></div></div></div></div> : null}
+    {dialog === 'manage' ? <div className="modal-bg" role="dialog" aria-modal="true" aria-label="管理登录 Cookie" onMouseDown={() => setDialog(undefined)}>
+      <div className="modal cookie-modal" onMouseDown={event => event.stopPropagation()}>
+        <div className="modal-head"><h2>登录 Cookie</h2><p>用于解析需要登录才能访问的视频。Cookie 保存在服务器 config/cookies.txt，不会写入日志。</p></div>
+        <div className="cookie-platforms">{(['youtube', 'instagram'] as CookiePlatform[]).map(value => {
+          const item = status?.platforms[value]
+          return <div className="cookie-platform" key={value}>
+            <strong>{cookiePlatformNames[value]}</strong>
+            <div className={`status ${item?.status === 'error' ? 'error' : ''}`}><span>{item?.message || '检查中…'}</span>{item?.updatedAt ? <small>更新于 {new Date(item.updatedAt).toLocaleString()}</small> : null}</div>
+            <button type="button" disabled={running} onClick={() => void update(value)}>{item?.running ? '等待登录…' : '在浏览器中登录'}</button>
+          </div>
+        })}</div>
+        <div className="cookie-manual">
+          <h3>手动粘贴</h3>
+          <p className="hint">只会替换所选平台的 Cookie，另一个平台和其他域名的数据会保留。</p>
+          <label>平台<select value={platform} onChange={event => setPlatform(event.target.value as CookiePlatform)}><option value="youtube">YouTube</option><option value="instagram">Instagram</option></select></label>
+          <label>Cookie 内容<textarea rows={8} value={contents} onChange={event => setContents(event.target.value)} placeholder="支持 Netscape cookies.txt、浏览器扩展导出的 JSON，或 Cookie: name=value; name2=value2" /></label>
+        </div>
+        {message ? <p className="error">{message}</p> : null}
+        <div className="modal-foot">
+          <button type="button" className="ghost" onClick={() => void openView()}>查看已保存的 Cookie</button>
+          <span style={{ flex: 1 }} />
+          <button type="button" onClick={() => setDialog(undefined)}>关闭</button>
+          <button type="button" className="primary" disabled={!contents.trim() || running} onClick={() => void submitManual()}>保存粘贴内容</button>
+        </div>
+      </div>
+    </div> : null}
+    {dialog === 'view' && view ? <div className="modal-bg" role="dialog" aria-modal="true" aria-label="查看 Cookie" onMouseDown={() => setDialog('manage')}>
+      <div className="modal cookie-view" onMouseDown={event => event.stopPropagation()}>
+        <div className="modal-head"><h2>已保存的 Cookie</h2><p>{view.entries.length} 条{view.updatedAt ? ` · 更新于 ${new Date(view.updatedAt).toLocaleString()}` : ''}</p></div>
+        <p className="warning">Cookie 可用于登录账号，请勿发送给其他人。默认只显示名称；仅在确有需要时显示完整值。</p>
+        {view.raw ? <textarea rows={16} readOnly value={view.raw} /> : <div className="cookie-entry-list">{view.entries.length ? view.entries.map((entry, index) => <div className="cookie-entry" key={`${entry.domain}-${entry.path}-${entry.name}-${index}`}><strong>{entry.name}</strong><span>{entry.platform} · {entry.domain}</span><small>{entry.expires ? `到期 ${new Date(entry.expires * 1000).toLocaleString()}` : '会话 Cookie'}{entry.httpOnly ? ' · HttpOnly' : ''}{entry.secure ? ' · Secure' : ''}</small></div>) : <p className="muted">当前没有 Cookie。</p>}</div>}
+        <div className="modal-foot">
+          <button className="ghost" onClick={() => void openView(!view.raw)}>{view.raw ? '隐藏完整值' : '显示完整值'}</button>
+          <span style={{ flex: 1 }} />
+          <button disabled={!view.raw} onClick={() => view.raw && void copyText(view.raw, 'Cookie 文件')}>复制完整文件</button>
+          <button onClick={() => setDialog('manage')}>返回</button>
+        </div>
+      </div>
+    </div> : null}
   </>
 }
 
 function DownloadPage({ jobs, setJobs }: { jobs: DownloadJob[]; setJobs: (jobs: DownloadJob[]) => void }) {
-  const [mode, setMode] = useState<'links' | 'creator'>('links'), [input, setInput] = useState(''), [items, setItems] = useState<MediaItem[]>([]), [options, setOptions] = useState(initialOptions), [message, setMessage] = useState(''), [busy, setBusy] = useState(false)
+  const [mode, setMode] = useState<'links' | 'creator'>('links'), [input, setInput] = useState(''), [items, setItems] = useState<MediaItem[]>([]), [options, setOptions] = useState(initialOptions), [message, setMessage] = useState(''), [busy, setBusy] = useState(false), [showFinished, setShowFinished] = useState(false)
   const deferred = useDeferredValue(items), selected = useMemo(() => items.filter(item => item.selected), [items])
   useEffect(() => { void Promise.all([api.destination.current(), api.downloads.list()]).then(([outputRoot, history]) => { setOptions(value => ({ ...value, outputRoot })); if (history.length) setJobs(history) }) }, [setJobs])
-  useEffect(() => onEvent(raw => { const event = raw as WorkbenchEvent; if (event.type === 'downloads') setJobs(event.jobs); if (event.type === 'creator') { const update = event.event; if (update.type === 'item') setItems(current => current.some(item => item.id === update.item.id ? true : false) ? current : [...current, update.item]); if (update.type === 'status') setMessage(update.message); if (update.type === 'done') { setBusy(false); setMessage(`扫描完成，共 ${update.count} 个视频`) } if (update.type === 'error') { setBusy(false); setMessage(update.message) } } }), [setJobs])
+  useEffect(() => onEvent(raw => { const event = raw as WorkbenchEvent; if (event.type === 'downloads') setJobs(event.jobs); if (event.type === 'creator') { const update = event.event; if (update.type === 'item') setItems(current => current.some(item => item.id === update.item.id) ? current : [...current, update.item]); if (update.type === 'status') setMessage(update.message); if (update.type === 'done') { setBusy(false); setMessage(`扫描完成，共 ${update.count} 个视频`) } if (update.type === 'error') { setBusy(false); setMessage(update.message) } } }), [setJobs])
   const analyze = async () => { if (!input.trim()) return; setBusy(true); setMessage(''); try { const urls = input.split(/\r?\n/).map(value => value.trim()).filter(Boolean); setItems(await api.source.analyze(urls, options.cookieSource)); setMessage(`已解析 ${urls.length} 个链接`) } catch (error) { setMessage(errorText(error)) } finally { setBusy(false) } }
   const scan = async () => { setItems([]); setBusy(true); setMessage('正在扫描主页…'); try { await api.creator.scan(input, options.cookieSource) } catch (error) { setBusy(false); setMessage(errorText(error)) } }
   const toggle = useCallback((id: string) => setItems(current => current.map(item => item.id === id ? { ...item, selected: !item.selected } : item)), [])
   const format = useCallback((id: string, value: string) => setItems(current => current.map(item => item.id === id ? { ...item, selectedFormatId: value } : item)), [])
-  const start = async () => { try { setJobs(await api.downloads.start({ items: selected, options })); setMessage('下载任务已创建，完成后将自动进入媒体库') } catch (error) { setMessage(errorText(error)) } }
+  const setCookieSource = useCallback((cookieSource: 'none' | 'file') => setOptions(value => ({ ...value, cookieSource })), [])
+  const start = async () => { try { setJobs(await api.downloads.start({ items: selected, options })); toast(`已创建 ${selected.length} 个下载任务`); setMessage('下载完成后会自动进入媒体库') } catch (error) { setMessage(errorText(error)) } }
+  const allSelected = items.length > 0 && selected.length === items.length
+  const active = jobs.filter(job => ['queued', 'downloading'].includes(job.status)), finished = jobs.filter(job => !['queued', 'downloading'].includes(job.status))
+  const failed = finished.filter(job => job.status === 'failed').length
+  const visibleJobs = showFinished ? jobs : active
   return <div className="page-stack">
     <section className="panel source">
-      <div className="segmented"><button className={mode === 'links' ? 'active' : ''} onClick={() => setMode('links')}>链接下载</button><button className={mode === 'creator' ? 'active' : ''} onClick={() => setMode('creator')}>博主主页</button></div>
-      <textarea rows={4} value={input} onChange={event => setInput(event.target.value)} placeholder={mode === 'links' ? '每行粘贴一个视频链接…' : '粘贴 YouTube 频道或 Instagram 主页…'} />
-      <div className="row between">
-        <div className="cookie-area">
-          <label>登录 Cookie <select value={options.cookieSource} onChange={event => setOptions(value => ({ ...value, cookieSource: event.target.value as 'none' | 'file' }))}><option value="none">不使用</option><option value="file">服务器 cookies.txt</option></select></label>
-          <CookieManager onUseFile={() => setOptions(value => ({ ...value, cookieSource: 'file' }))} />
-        </div>
+      <div className="source-head">
+        <div className="segmented" role="tablist" aria-label="来源类型"><button role="tab" aria-selected={mode === 'links'} className={mode === 'links' ? 'active' : ''} onClick={() => setMode('links')}>视频链接</button><button role="tab" aria-selected={mode === 'creator'} className={mode === 'creator' ? 'active' : ''} onClick={() => setMode('creator')}>博主主页</button></div>
+        <CookieManager cookieSource={options.cookieSource} setCookieSource={setCookieSource} />
+      </div>
+      <textarea rows={4} value={input} onChange={event => setInput(event.target.value)} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && input.trim() && !busy) void (mode === 'links' ? analyze() : scan()) }} placeholder={mode === 'links' ? '粘贴 YouTube 或 Instagram 视频链接，每行一个' : '粘贴 YouTube 频道或 Instagram 主页地址'} aria-label={mode === 'links' ? '视频链接' : '博主主页地址'} />
+      <div className="source-foot">
+        <p className="hint">{mode === 'links' ? '解析后可逐个选择画质与格式；⌘/Ctrl + Enter 快速解析' : '扫描会列出该主页的全部视频，结果逐条出现'}</p>
         <button className="primary" disabled={busy || !input.trim()} onClick={() => void (mode === 'links' ? analyze() : scan())}>{busy ? '处理中…' : mode === 'links' ? '解析链接' : '扫描主页'}</button>
       </div>
       {message ? <p className="notice">{message}</p> : null}
     </section>
     <section className="split">
-      <div className="panel"><div className="panel-head"><div><h2>待下载视频</h2><p>{selected.length} / {items.length} 项已选择</p></div></div><div className="result-list">{deferred.length ? deferred.map(item => <MediaResult key={`${item.platform}-${item.id}`} item={item} toggle={toggle} format={format} />) : <div className="empty">解析结果会显示在这里</div>}</div></div>
-      <aside className="panel settings-card"><h2>下载设置</h2><label>视频质量<select value={options.quality} onChange={event => setOptions(value => ({ ...value, quality: event.target.value as DownloadOptions['quality'] }))}>{['best', '2160', '1440', '1080', '720', '480'].map(value => <option key={value} value={value}>{value === 'best' ? '最佳质量' : `${value}p 以内`}</option>)}</select></label><label>封装格式<select value={options.container} onChange={event => setOptions(value => ({ ...value, container: event.target.value as 'mp4' | 'mkv' }))}><option>mp4</option><option>mkv</option></select></label><label className="check"><input type="checkbox" checked={options.quickTimeCompatible} onChange={event => setOptions(value => ({ ...value, quickTimeCompatible: event.target.checked }))} /> QuickTime 兼容转换</label><button className="primary wide" disabled={!selected.length} onClick={() => void start()}>下载 {selected.length || ''} 个项目</button></aside>
+      <div className="panel">
+        <div className="panel-head">
+          <div><h2>待下载</h2><p>{selected.length} / {items.length} 已选</p></div>
+          {items.length ? <button className="ghost" onClick={() => setItems(current => current.map(item => ({ ...item, selected: !allSelected })))}>{allSelected ? '取消全选' : '全选'}</button> : null}
+        </div>
+        <div className="result-list">{deferred.length ? deferred.map(item => <MediaResult key={`${item.platform}-${item.id}`} item={item} toggle={toggle} format={format} />) : <div className="empty"><strong>还没有解析结果</strong>在上方粘贴链接或主页地址，解析后在这里勾选要下载的视频</div>}</div>
+      </div>
+      <aside className="panel settings-card">
+        <h2>下载设置</h2>
+        <label>视频质量<select value={options.quality} onChange={event => setOptions(value => ({ ...value, quality: event.target.value as DownloadOptions['quality'] }))}>{['best', '2160', '1440', '1080', '720', '480'].map(value => <option key={value} value={value}>{value === 'best' ? '最佳质量' : `${value}p 以内`}</option>)}</select></label>
+        <label>封装格式<select value={options.container} onChange={event => setOptions(value => ({ ...value, container: event.target.value as 'mp4' | 'mkv' }))}><option>mp4</option><option>mkv</option></select></label>
+        <label className="check"><input type="checkbox" checked={options.quickTimeCompatible} onChange={event => setOptions(value => ({ ...value, quickTimeCompatible: event.target.checked }))} />QuickTime 兼容转换</label>
+        <button className="primary wide" disabled={!selected.length} onClick={() => void start()}>{selected.length ? `下载 ${selected.length} 个视频` : '先勾选要下载的视频'}</button>
+      </aside>
     </section>
-    {jobs.length ? <section className="panel"><div className="panel-head"><div><h2>下载队列</h2><p>{jobs.filter(job => ['completed', 'skipped'].includes(job.status)).length} / {jobs.length} 已完成</p></div><button onClick={() => void api.downloads.cancel()}>全部停止</button></div><div className="task-list">{jobs.map(job => <div className="task" key={job.id}><div className="row between"><strong>{job.item.title}</strong><span className={`pill ${job.status}`}>{job.status}</span></div><div className="progress"><i style={{ width: `${job.progress}%` }} /></div><small>{job.progress.toFixed(1)}% · {job.detail || job.error || '等待中'}</small></div>)}</div></section> : null}
+    {jobs.length ? <section className="panel">
+      <div className="panel-head">
+        <div><h2>下载队列</h2><p>{active.length} 进行中 · {finished.length - failed} 已结束{failed ? ` · ${failed} 失败` : ''}</p></div>
+        <div className="row">
+          {finished.length ? <button className="ghost" onClick={() => setShowFinished(value => !value)}>{showFinished ? '只看进行中' : `显示已结束（${finished.length}）`}</button> : null}
+          {active.length ? <button onClick={() => void api.downloads.cancel()}>全部停止</button> : null}
+        </div>
+      </div>
+      <div className="task-list">{visibleJobs.length ? visibleJobs.map(job => <div className="task" key={job.id}>
+        <div className="row between"><span className="task-title" title={job.item.title}>{job.item.title}</span><span className={`pill ${job.status}`}>{taskNames[job.status] || job.status}</span></div>
+        <div className={`progress ${['completed', 'skipped'].includes(job.status) ? 'done' : job.status === 'failed' ? 'bad' : ''}`}><i style={{ width: `${job.progress}%` }} /></div>
+        <div className="task-meta"><span className="data">{job.progress.toFixed(1)}%</span><span>·</span><span>{job.error || job.detail || '等待中'}</span></div>
+      </div>) : <div className="empty small">没有进行中的下载</div>}</div>
+    </section> : null}
   </div>
 }
 
+/* -------------------------------------------------------------- publish */
+
 function PublishDialog({ assets, close, done }: { assets: MediaAsset[]; close: () => void; done: () => void }) {
   const single = assets.length === 1, [dispatchMode, setDispatch] = useState<'platform' | 'local'>('platform'), [scheduled, setScheduled] = useState(!single), [start, setStart] = useState(''), [interval, setIntervalValue] = useState(1), [title, setTitle] = useState(assets[0]?.analysis?.englishTitle.slice(0, 30) || assets[0]?.filename.slice(0, 30) || ''), [topics, setTopics] = useState(normalizePublishTopics(assets[0]?.analysis?.englishTitle.slice(0, 30) || assets[0]?.filename.slice(0, 30) || '', assets[0]?.analysis?.keyTopics || []).join(' ')), [aigc, setAigc] = useState(true), [waitForCovers, setWaitForCovers] = useState(false), [message, setMessage] = useState('')
-  const submit = async () => { const startDate = start ? new Date(start) : undefined; const automatic = !single && dispatchMode === 'platform' && !start, automaticTimes = automatic ? automaticPlatformPublishTimes(assets.length, interval) : []; if (scheduled && ((!startDate && !automatic) || (startDate && Number.isNaN(startDate.getTime())))) return setMessage('请选择有效的首条发布时间'); const jobs = assets.map((asset, index) => ({ assetId: asset.id, title: single ? title : (asset.analysis?.englishTitle || asset.filename).slice(0, 30), topics: (single ? topics.split(/[#\s,，]+/) : asset.analysis?.keyTopics || ['英语学习']).filter(Boolean).slice(0, 5), publishAt: startDate ? new Date(startDate.getTime() + index * interval * 3600_000).toISOString() : automaticTimes[index], aigc, waitForCovers })); const action = dispatchMode === 'local' ? '创建本地定时发布队列' : automatic ? '立即发布首条并按配置间隔提交其余抖音平台排期' : scheduled ? '立即提交抖音平台排期' : '立即公开发布'; if (!window.confirm(`即将${action} ${jobs.length} 个视频；浏览器每次提交将随机间隔 1–3 分钟，是否继续？`)) return; try { await api.publisher.publish({ jobs, dispatchMode, idempotencyKey: crypto.randomUUID() }); done() } catch (error) { setMessage(errorText(error)) } }
-  return <div className="modal-bg"><div className="modal"><h2>发布到抖音</h2><p className="warning">确认后将通过可见的远程 Chromium 操作抖音创作者中心；相邻作品随机间隔 1–3 分钟提交，验证码或风控会暂停任务。</p>{single ? <><label>英文标题（最多 30 字符）<input maxLength={30} value={title} onChange={event => setTitle(event.target.value)} /></label><label>话题（最多 5 个）<input value={topics} onChange={event => setTopics(event.target.value)} /></label><label>发布方式<select value={scheduled ? 'scheduled' : 'immediate'} onChange={event => setScheduled(event.target.value === 'scheduled')}><option value="immediate">立即发布</option><option value="scheduled">定时发布</option></select></label></> : <label>批量执行方式<select value={dispatchMode} onChange={event => setDispatch(event.target.value as 'platform' | 'local')}><option value="platform">立即提交抖音排期</option><option value="local">本地到点逐条发布</option></select></label>}{scheduled ? <><label>{!single && dispatchMode === 'platform' ? '首条发布时间（留空则首条立即发布，其余从至少 2 小时后开始）' : '首条发布时间'}<input type="datetime-local" value={start} onChange={event => setStart(event.target.value)} /></label>{!single ? <label>抖音定时发布间隔（小时）<input type="number" min="1" value={interval} onChange={event => setIntervalValue(Math.max(1, Number(event.target.value)))} /></label> : null}</> : null}<label className="check"><input type="checkbox" checked={aigc} onChange={event => setAigc(event.target.checked)} /> 声明“内容由 AI 生成”</label><label className="check"><input type="checkbox" checked={waitForCovers} onChange={event => setWaitForCovers(event.target.checked)} /> 等待横竖封面生成完成</label>{message ? <p className="error">{message}</p> : null}<div className="row end"><button onClick={close}>取消</button><button className="primary" onClick={() => void submit()}>确认发布</button></div></div></div>
+  const topicCount = topics.split(/[#\s,，]+/).filter(Boolean).length
+  const submit = async () => { const startDate = start ? new Date(start) : undefined; const automatic = !single && dispatchMode === 'platform' && !start, automaticTimes = automatic ? automaticPlatformPublishTimes(assets.length, interval) : []; if (scheduled && ((!startDate && !automatic) || (startDate && Number.isNaN(startDate.getTime())))) return setMessage('请选择有效的首条发布时间'); const jobs = assets.map((asset, index) => ({ assetId: asset.id, title: single ? title : (asset.analysis?.englishTitle || asset.filename).slice(0, 30), topics: (single ? topics.split(/[#\s,，]+/) : asset.analysis?.keyTopics || ['英语学习']).filter(Boolean).slice(0, 5), publishAt: startDate ? new Date(startDate.getTime() + index * interval * 3600_000).toISOString() : automaticTimes[index], aigc, waitForCovers })); const action = dispatchMode === 'local' ? '创建本地定时发布队列' : automatic ? '立即发布首条并按配置间隔提交其余抖音平台排期' : scheduled ? '立即提交抖音平台排期' : '立即公开发布'; if (!window.confirm(`即将${action} ${jobs.length} 个视频；浏览器每次提交将随机间隔 1–3 分钟，是否继续？`)) return; try { await api.publisher.publish({ jobs, dispatchMode, idempotencyKey: crypto.randomUUID() }); toast(`已创建 ${jobs.length} 个发布任务`); done() } catch (error) { setMessage(errorText(error)) } }
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') close() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [close])
+  return <div className="modal-bg" role="dialog" aria-modal="true" aria-label="发布到抖音" onMouseDown={close}>
+    <div className="modal" onMouseDown={event => event.stopPropagation()}>
+      <div className="modal-head"><h2>发布到抖音</h2><p>{single ? (assets[0].analysis?.title || assets[0].filename) : `${assets.length} 个视频，标题与话题取自各自的分析结果`}</p></div>
+      {single ? <>
+        <label><span className="label-row">英文标题<span>{title.length} / 30</span></span><input maxLength={30} value={title} onChange={event => setTitle(event.target.value)} /></label>
+        <label><span className="label-row">话题<span>{topicCount} / 5</span></span><input value={topics} onChange={event => setTopics(event.target.value)} placeholder="用空格分隔，最多 5 个" /></label>
+        <div className="field"><span id="publish-timing">发布时间</span><div className="segmented" role="tablist" aria-labelledby="publish-timing"><button type="button" role="tab" aria-selected={!scheduled} className={scheduled ? '' : 'active'} onClick={() => setScheduled(false)}>立即发布</button><button type="button" role="tab" aria-selected={scheduled} className={scheduled ? 'active' : ''} onClick={() => setScheduled(true)}>定时发布</button></div></div>
+      </> : <label>批量执行方式<select value={dispatchMode} onChange={event => setDispatch(event.target.value as 'platform' | 'local')}><option value="platform">一次性提交到抖音平台排期</option><option value="local">本地到点后逐条提交</option></select></label>}
+      {scheduled ? <>
+        <label>{!single && dispatchMode === 'platform' ? '首条发布时间（留空：首条立即发布，其余从至少 2 小时后开始）' : '首条发布时间'}<input type="datetime-local" value={start} onChange={event => setStart(event.target.value)} /></label>
+        {!single ? <label>相邻作品的发布间隔（小时）<input type="number" min="1" value={interval} onChange={event => setIntervalValue(Math.max(1, Number(event.target.value)))} /></label> : null}
+      </> : null}
+      <fieldset>
+        <legend>发布选项</legend>
+        <label className="check"><input type="checkbox" checked={aigc} onChange={event => setAigc(event.target.checked)} />声明“内容由 AI 生成”</label>
+        <label className="check"><input type="checkbox" checked={waitForCovers} onChange={event => setWaitForCovers(event.target.checked)} />等待横竖封面生成完成后再提交</label>
+      </fieldset>
+      <p className="warning">将通过可见的浏览器操作抖音创作者中心；相邻作品随机间隔 1–3 分钟提交。遇到验证码或风控会暂停，并在任务页提示需要检查。</p>
+      {message ? <p className="error">{message}</p> : null}
+      <div className="modal-foot"><button onClick={close}>取消</button><button className="primary" onClick={() => void submit()}>确认发布</button></div>
+    </div>
+  </div>
 }
+
+/* -------------------------------------------------------------- library */
 
 const FirstFrame = memo(function FirstFrame({ asset }: { asset: MediaAsset }) {
   const [failed, setFailed] = useState(false)
@@ -120,24 +262,96 @@ const FirstFrame = memo(function FirstFrame({ asset }: { asset: MediaAsset }) {
     : <img loading="lazy" decoding="async" src={api.library.thumbnailUrl(asset.id)} alt={`${asset.analysis?.title || asset.filename} 首帧`} onError={() => setFailed(true)} />
 })
 
+const SearchIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+
+const AssetCard = memo(function AssetCard({ asset, selected, toggle, play, mark, publish }: { asset: MediaAsset; selected: boolean; toggle: (id: string) => void; play: (asset: MediaAsset) => void; mark: (asset: MediaAsset) => void; publish: (asset: MediaAsset) => void }) {
+  const analysis = asset.analysis
+  return <article className={`asset-card ${selected ? 'selected' : ''}`}>
+    <div className="asset-top">
+      <label className="select" title={selected ? '取消选择' : '选择'}><input type="checkbox" checked={selected} onChange={() => toggle(asset.id)} aria-label={`选择 ${analysis?.title || asset.filename}`} /></label>
+      <span className={`pill ${asset.processingState}`}>{asset.processingState === 'processed' ? '已处理' : analysis ? '未处理' : '等待分析'}</span>
+    </div>
+    <button className="preview" onClick={() => play(asset)} aria-label="播放预览"><FirstFrame asset={asset} />{asset.duration ? <span className="duration">{formatDuration(asset.duration)}</span> : null}</button>
+    <div className="asset-copy">
+      <h2 title={analysis?.title || asset.filename}>{analysis?.title || asset.filename}</h2>
+      {analysis ? <p className="english" title={analysis.englishTitle}>{analysis.englishTitle}</p> : null}
+      <p className="filename" title={asset.file}>{asset.filename}</p>
+      {analysis ? <>
+        <div className="asset-tags"><span className="category">{analysis.category}</span><span className="evidence" title={analysis.evidenceNote}><i className={`dot ${analysis.confidence}`} />置信度{confidenceNames[analysis.confidence] || analysis.confidence}</span></div>
+        <div className="topics">{analysis.keyTopics.map(topic => <span key={topic}>#{topic}</span>)}</div>
+        <p className="summary" title={analysis.summary}>{analysis.summary}</p>
+        <div className="copy-row"><span>复制</span><button onClick={() => void copyText(analysis.title, '中文标题')}>中文标题</button><button onClick={() => void copyText(analysis.englishTitle, '英文标题')}>英文标题</button><button onClick={() => void copyText(analysis.keyTopics.map(value => `#${value}`).join(' '), '话题')}>话题</button><button onClick={() => void copyText(analysis.summary, '摘要')}>摘要</button></div>
+      </> : <p className="muted">尚未分析。勾选后点击「分析」，这里会显示分类、标题、话题和摘要。</p>}
+    </div>
+    <div className="card-actions">
+      <button className="ghost" onClick={() => mark(asset)}>{asset.processingState === 'processed' ? '标为未处理' : '标为已处理'}</button>
+      <div className="row"><a className="button ghost" href={api.library.fileUrl(asset.id)}>下载</a><button disabled={!analysis} title={analysis ? undefined : '需要先完成分析'} onClick={() => publish(asset)}>发布</button></div>
+    </div>
+  </article>
+})
+
 function LibraryPage({ assets, reload, openTasks }: { assets: MediaAsset[]; reload: () => void; openTasks: (taskTab: TaskTab) => void }) {
-  const [selected, setSelected] = useState<Set<string>>(new Set()), [queryInput, setQueryInput] = useState(''), [query, setQuery] = useState(''), [state, setState] = useState<LibraryStateFilter>('unprocessed'), [category, setCategory] = useState('all'), [directory, setDirectory] = useState('all'), [playing, setPlaying] = useState<MediaAsset>(), [publishing, setPublishing] = useState<MediaAsset[]>(), [importPath, setImportPath] = useState('/downloads'), [message, setMessage] = useState('')
+  const [selected, setSelected] = useState<Set<string>>(new Set()), [queryInput, setQueryInput] = useState(''), [state, setState] = useState<LibraryStateFilter>('unprocessed'), [category, setCategory] = useState('all'), [directory, setDirectory] = useState('all'), [playing, setPlaying] = useState<MediaAsset>(), [publishing, setPublishing] = useState<MediaAsset[]>(), [importOpen, setImportOpen] = useState(false), [importPath, setImportPath] = useState('/downloads'), [importing, setImporting] = useState(false), [message, setMessage] = useState('')
+  const query = useDeferredValue(queryInput.trim())
   const categories = useMemo(() => [...new Set(assets.map(asset => asset.analysis?.category).filter(Boolean) as string[])].sort(), [assets])
   const directories = useMemo(() => [...new Set(assets.map(asset => mediaAssetDirectory(asset.file)))].sort(), [assets])
   const visible = useMemo(() => filterMediaAssets(assets, state, category, query, directory), [assets, state, category, query, directory])
-  const chosen = assets.filter(asset => selected.has(asset.id))
+  const stateCounts = useMemo(() => Object.fromEntries(stateOrder.map(value => [value, filterMediaAssets(assets, value, category, query, directory).length])) as Record<LibraryStateFilter, number>, [assets, category, query, directory])
+  const chosen = useMemo(() => assets.filter(asset => selected.has(asset.id)), [assets, selected])
+  const filtered = state !== 'unprocessed' || category !== 'all' || directory !== 'all' || Boolean(query)
   useEffect(() => {
     if (!playing) return
     const close = (event: KeyboardEvent) => { if (event.key === 'Escape') setPlaying(undefined) }
     window.addEventListener('keydown', close)
     return () => window.removeEventListener('keydown', close)
   }, [playing])
-  const analyze = async (force = false) => { if (!chosen.length) return; if (force && !window.confirm('将重新分析所选视频并覆盖已有分析结果，是否继续？')) return; try { await api.analysis.start(chosen.map(asset => asset.id), force); setMessage('分析任务已创建'); openTasks('analysis') } catch (error) { setMessage(errorText(error)) } }
-  const mark = async (asset: MediaAsset) => { await api.library.state(asset.id, asset.processingState === 'processed' ? 'unprocessed' : 'processed'); reload() }
-  return <div className="page-stack"><section className="panel toolbar"><div className="search"><input value={queryInput} onChange={event => setQueryInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') setQuery(queryInput) }} placeholder="搜索文件名、标题、话题或摘要" /><button onClick={() => setQuery(queryInput)}>搜索</button></div><select value={directory} onChange={event => setDirectory(event.target.value)} title="媒体目录"><option value="all">全部目录</option>{directories.map(value => <option key={value} value={value}>{value}</option>)}</select><select value={category} onChange={event => setCategory(event.target.value)}><option value="all">全部分类</option>{categories.map(value => <option key={value}>{value}</option>)}</select><select value={state} onChange={event => setState(event.target.value as typeof state)}><option value="unprocessed">未处理</option><option value="processed">已处理</option><option value="awaiting-analysis">等待分析</option><option value="all">全部状态</option></select></section><section className="panel actionbar"><span>已选择 {selected.size} 项 · 当前显示 {visible.length} / {assets.length}</span><div className="row"><button onClick={() => setSelected(new Set(visible.map(asset => asset.id)))}>选择当前结果</button><button onClick={() => setSelected(new Set())}>清空</button><button disabled={!chosen.length} onClick={() => void analyze()}>分析</button><button disabled={!chosen.some(asset => asset.analysis)} onClick={() => void analyze(true)}>重新分析</button><button className="primary" disabled={!chosen.length || chosen.some(asset => !asset.analysis)} onClick={() => setPublishing(chosen)}>发布到抖音</button></div></section><section className="panel importbar"><input value={importPath} onChange={event => setImportPath(event.target.value)} /><button onClick={() => void api.library.import(importPath).then(result => { setMessage(`已导入 ${result.count} 个视频`); reload() }).catch(error => setMessage(errorText(error)))}>导入服务器目录</button><small>仅允许 /downloads 与 /imports</small>{message ? <span className="notice">{message}</span> : null}</section><main className="asset-grid">{visible.map(asset => <article className="asset-card" key={asset.id}><div className="asset-top"><input type="checkbox" checked={selected.has(asset.id)} onChange={() => setSelected(current => { const next = new Set(current); if (next.has(asset.id)) next.delete(asset.id); else next.add(asset.id); return next })} /><span className={`pill ${asset.processingState}`}>{asset.processingState === 'processed' ? '已处理' : '未处理'}</span></div><button className="preview" onClick={() => setPlaying(asset)}><FirstFrame asset={asset} /><small>{formatDuration(asset.duration)}</small></button><div className="asset-copy"><h2>{asset.analysis?.title || asset.filename}</h2><p className="english">{asset.analysis?.englishTitle || '等待分析'}</p><p className="filename">{asset.filename}</p>{asset.analysis ? <><span className="category">{asset.analysis.category}</span><div className="topics">{asset.analysis.keyTopics.map(topic => <span key={topic}>#{topic}</span>)}</div><p>{asset.analysis.summary}</p><small>{asset.analysis.evidenceNote} · {asset.analysis.confidence}</small><div className="copy-actions"><button onClick={() => void navigator.clipboard.writeText(asset.analysis!.title)}>复制中文标题</button><button onClick={() => void navigator.clipboard.writeText(asset.analysis!.englishTitle)}>复制英文标题</button><button onClick={() => void navigator.clipboard.writeText(asset.analysis!.keyTopics.map(value => `#${value}`).join(' '))}>复制话题</button><button onClick={() => void navigator.clipboard.writeText(asset.analysis!.summary)}>复制摘要</button></div></> : <p className="muted">选择视频并创建分析任务后，这里会显示分类、标题、话题和摘要。</p>}</div><div className="row between card-actions"><button onClick={() => void mark(asset)}>{asset.processingState === 'processed' ? '标为未处理' : '标为已处理'}</button><a href={api.library.fileUrl(asset.id)}>下载</a><button disabled={!asset.analysis} onClick={() => setPublishing([asset])}>发布</button></div></article>)}</main>{playing ? <div className="modal-bg" role="dialog" aria-modal="true" aria-label="视频播放" onMouseDown={() => setPlaying(undefined)}><div className="modal player" onMouseDown={event => event.stopPropagation()}><button className="player-close" aria-label="关闭播放" title="关闭" onClick={() => setPlaying(undefined)}>×</button><h2>{playing.analysis?.title || playing.filename}</h2><video controls autoPlay src={api.library.mediaUrl(playing.id)} /><p>{playing.filename}</p></div></div> : null}{publishing ? <PublishDialog assets={publishing} close={() => setPublishing(undefined)} done={() => { setPublishing(undefined); openTasks('publisher') }} /> : null}</div>
+  const toggle = useCallback((id: string) => setSelected(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next }), [])
+  const play = useCallback((asset: MediaAsset) => setPlaying(asset), [])
+  const publishOne = useCallback((asset: MediaAsset) => setPublishing([asset]), [])
+  const mark = useCallback(async (asset: MediaAsset) => { const next = asset.processingState === 'processed' ? 'unprocessed' : 'processed'; try { await api.library.state(asset.id, next); toast(next === 'processed' ? '已标为已处理' : '已标为未处理'); reload() } catch (error) { toast(errorText(error), 'bad') } }, [reload])
+  const analyze = async (force = false) => { if (!chosen.length) return; if (force && !window.confirm('将重新分析所选视频并覆盖已有分析结果，是否继续？')) return; try { await api.analysis.start(chosen.map(asset => asset.id), force); toast(`已为 ${chosen.length} 个视频创建分析任务`); openTasks('analysis') } catch (error) { setMessage(errorText(error)) } }
+  const runImport = async () => { setImporting(true); setMessage(''); try { const result = await api.library.import(importPath); toast(`已导入 ${result.count} 个视频`); reload() } catch (error) { setMessage(errorText(error)) } finally { setImporting(false) } }
+  const allVisibleSelected = visible.length > 0 && visible.every(asset => selected.has(asset.id))
+  return <div className="page-stack">
+    <section className="panel toolbar">
+      <div className="toolbar-row">
+        <div className="search"><SearchIcon /><input type="search" value={queryInput} onChange={event => setQueryInput(event.target.value)} placeholder="搜索文件名、标题、话题或摘要" aria-label="搜索媒体库" /></div>
+        <select value={directory} onChange={event => setDirectory(event.target.value)} aria-label="媒体目录"><option value="all">全部目录</option>{directories.map(value => <option key={value} value={value}>{value}</option>)}</select>
+        <select value={category} onChange={event => setCategory(event.target.value)} aria-label="分类"><option value="all">全部分类</option>{categories.map(value => <option key={value}>{value}</option>)}</select>
+        <button className="ghost" aria-expanded={importOpen} onClick={() => setImportOpen(value => !value)}>导入目录</button>
+      </div>
+      <div className="toolbar-row between">
+        <div className="state-chips" role="tablist" aria-label="处理状态"><span className="label">状态</span>{stateOrder.map(value => <button role="tab" aria-selected={state === value} className={`chip ${state === value ? 'active' : ''}`} key={value} onClick={() => setState(value)}>{stateNames[value]}<em>{stateCounts[value]}</em></button>)}</div>
+        {filtered ? <button className="ghost" onClick={() => { setQueryInput(''); setState('unprocessed'); setCategory('all'); setDirectory('all') }}>重置筛选</button> : null}
+      </div>
+      {importOpen ? <div className="import-row">
+        <input value={importPath} onChange={event => setImportPath(event.target.value)} aria-label="服务器目录" />
+        <button disabled={importing || !importPath.trim()} onClick={() => void runImport()}>{importing ? '导入中…' : '导入该目录'}</button>
+        <span className="hint">扫描服务器目录中的视频并登记到媒体库，仅允许 /downloads 与 /imports</span>
+        {message ? <span className="error">{message}</span> : null}
+      </div> : null}
+    </section>
+    <section className="panel actionbar">
+      <div className="summary"><span>已选 <strong>{selected.size}</strong> 项</span><span className="hint">· 显示 <span className="data">{visible.length}</span> / <span className="data">{assets.length}</span></span></div>
+      <div className="row">
+        <button className="ghost" disabled={!visible.length} onClick={() => setSelected(allVisibleSelected ? new Set() : new Set(visible.map(asset => asset.id)))}>{allVisibleSelected ? '取消全选' : '全选当前结果'}</button>
+        {selected.size ? <button className="ghost" onClick={() => setSelected(new Set())}>清空选择</button> : null}
+        <span className="divider" />
+        <button disabled={!chosen.length} onClick={() => void analyze()}>分析</button>
+        <button disabled={!chosen.some(asset => asset.analysis)} onClick={() => void analyze(true)}>重新分析</button>
+        <button className="primary" disabled={!chosen.length || chosen.some(asset => !asset.analysis)} title={chosen.some(asset => !asset.analysis) ? '所选视频需要先完成分析' : undefined} onClick={() => setPublishing(chosen)}>发布到抖音{chosen.length > 1 ? ` (${chosen.length})` : ''}</button>
+      </div>
+    </section>
+    {message && !importOpen ? <p className="error">{message}</p> : null}
+    {visible.length ? <main className="asset-grid">{visible.map(asset => <AssetCard key={asset.id} asset={asset} selected={selected.has(asset.id)} toggle={toggle} play={play} mark={mark} publish={publishOne} />)}</main>
+      : <section className="panel"><div className="empty">{assets.length ? <><strong>没有符合条件的视频</strong>试试切换状态、分类或目录，或清空搜索词</> : <><strong>媒体库是空的</strong>完成下载后视频会自动出现，也可以点击「导入目录」登记服务器上的文件</>}</div></section>}
+    {playing ? <div className="modal-bg" role="dialog" aria-modal="true" aria-label="视频播放" onMouseDown={() => setPlaying(undefined)}><div className="modal player" onMouseDown={event => event.stopPropagation()}><button className="player-close" aria-label="关闭播放" title="关闭 (Esc)" onClick={() => setPlaying(undefined)}>×</button><h2>{playing.analysis?.title || playing.filename}</h2><video controls autoPlay src={api.library.mediaUrl(playing.id)} /><p className="filename">{playing.filename}</p></div></div> : null}
+    {publishing ? <PublishDialog assets={publishing} close={() => setPublishing(undefined)} done={() => { setPublishing(undefined); openTasks('publisher') }} /> : null}
+  </div>
 }
 
-const taskNames: Record<string, string> = { queued: '等待中', preparing: '准备媒体', analyzing: '分析中', completed: '已完成', failed: '失败', cancelled: '已取消', waiting_local: '本地等待', running: '执行中', launching: '启动浏览器', uploading: '上传中', scheduling: '设置排期', waiting_covers: '等待横竖封面', submitting: '提交中', published: '已发布', scheduled: '已排期', needs_login: '需要登录', needs_attention: '需要检查', interrupted: '已中断', partial: '部分完成' }
+/* ---------------------------------------------------------------- tasks */
+
 const analysisStageNames = { queue: '队列', prepare: '媒体', codex: 'Codex', validate: '校验', complete: '完成' }
 
 function AnalysisTask({ job, reload }: { job: AnalysisJob; reload: () => void }) {
@@ -146,8 +360,8 @@ function AnalysisTask({ job, reload }: { job: AnalysisJob; reload: () => void })
   const logRef = useRef<HTMLDivElement>(null)
   useEffect(() => { if (active && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight }, [active, logs.length])
   return <article className="task analysis-task">
-    <div className="row between"><strong>{job.assetIds.length} 个视频 · {job.id.slice(0, 8)}</strong><span className={`pill ${job.status}`}>{taskNames[job.status] || job.status}</span></div>
-    <div className="progress"><i style={{ width: `${job.progress}%` }} /></div>
+    <div className="row between"><span className="task-title">{job.assetIds.length} 个视频 <span className="data muted">· {job.id.slice(0, 8)}</span></span><span className={`pill ${job.status}`}>{taskNames[job.status] || job.status}</span></div>
+    <div className={`progress ${job.status === 'completed' ? 'done' : job.status === 'failed' ? 'bad' : ''}`}><i style={{ width: `${job.progress}%` }} /></div>
     <div className="analysis-summary"><span>{Math.round(job.progress)}%</span><span>{job.processedItems || 0}/{totalItems} 个媒体已准备</span><span>更新于 {new Date(job.updatedAt).toLocaleTimeString()}</span></div>
     <p>{job.message}</p>
     {job.currentItem ? <p className="analysis-current" title={job.currentItem}>当前文件：{job.currentItem}</p> : null}
@@ -162,12 +376,43 @@ function AnalysisTask({ job, reload }: { job: AnalysisJob; reload: () => void })
   </article>
 }
 
+function PublishBatchCard({ batch, reload }: { batch: PublishBatch; reload: () => void }) {
+  return <article className="batch">
+    <div className="row between"><span className="task-title">{batch.dispatchMode === 'local' ? '本地定时' : '抖音平台排期'} <span className="data muted">· {batch.id.slice(0, 8)} · {new Date(batch.createdAt).toLocaleString()}</span></span><span className={`pill ${batch.status}`}>{taskNames[batch.status] || batch.status}</span></div>
+    <div className="publish-job publish-job-head"><span>作品</span><span>状态</span><span>本地提交时间</span><span>抖音发布时间</span><span /></div>
+    {batch.jobs.map(job => <div className="publish-job" key={job.id}>
+      <span title={job.title}>{job.title}</span>
+      <span className={`pill ${job.status}`}>{taskNames[job.status] || job.status}</span>
+      <time>{job.submitAt ? new Date(job.submitAt).toLocaleString() : job.executeAt ? new Date(job.executeAt).toLocaleString() : '—'}</time>
+      <time>{job.publishAt ? new Date(job.publishAt).toLocaleString() : batch.dispatchMode === 'local' ? '提交后立即发布' : '立即发布'}</time>
+      <span className="actions">{job.screenshot ? <a target="_blank" rel="noreferrer" href={`/api/publisher/artifacts/${encodeURIComponent(job.screenshot.split('/').pop()!)}`}>诊断截图</a> : null}{['failed', 'needs_login', 'needs_attention', 'interrupted', 'cancelled'].includes(job.status) ? <button onClick={() => void api.publisher.retry(job.id).then(reload)}>重试</button> : null}</span>
+      {job.error ? <p className="error">{job.error}</p> : null}
+    </div>)}
+    <div className="batch-foot">
+      {['queued', 'waiting_local', 'running'].includes(batch.status) ? <button className="danger-text" onClick={() => { if (window.confirm('确认取消该发布批次？已发布到抖音的作品不会撤回，未执行的任务将停止。')) void api.publisher.cancelBatch(batch.id).then(reload) }}>取消批次</button> : null}
+      {['completed', 'partial', 'failed', 'needs_attention', 'interrupted', 'cancelled'].includes(batch.status) ? <button className="danger-text" onClick={() => { if (window.confirm('确认删除该批次历史及关联诊断记录？')) void api.publisher.deleteBatch(batch.id).then(reload) }}>删除历史</button> : null}
+    </div>
+  </article>
+}
+
 function TasksPage({ analysis, batches, reload }: { analysis: AnalysisJob[]; batches: PublishBatch[]; reload: () => void }) {
   const [taskTab, setTaskTab] = useState<TaskTab>(() => storedChoice(TASK_TAB_STORAGE_KEY, taskTabs, 'analysis'))
   const historyCount = analysis.filter(job => !['queued', 'preparing', 'analyzing'].includes(job.status)).length
   useEffect(() => { try { window.localStorage.setItem(TASK_TAB_STORAGE_KEY, taskTab) } catch { /* storage unavailable */ } }, [taskTab])
-  return <section className="panel task-panel"><div className="task-tabs" role="tablist" aria-label="任务类型"><button role="tab" aria-selected={taskTab === 'analysis'} className={taskTab === 'analysis' ? 'active' : ''} onClick={() => setTaskTab('analysis')}><strong>分析任务</strong><span>Codex 单并发执行</span><em>{analysis.length}</em></button><button role="tab" aria-selected={taskTab === 'publisher'} className={taskTab === 'publisher' ? 'active' : ''} onClick={() => setTaskTab('publisher')}><strong>抖音发布任务</strong><span>串行操作同一浏览器</span><em>{batches.length}</em></button>{taskTab === 'publisher' ? <a target="_blank" rel="noreferrer" href="https://creator.douyin.com/creator-micro/content/manage">作品管理</a> : null}</div>{taskTab === 'analysis' ? <><div className="task-history-actions"><span>共 {analysis.length} 条记录，{historyCount} 条可清除</span><button className="danger-text" disabled={!historyCount} onClick={() => { if (window.confirm(`确认清除全部 ${historyCount} 条已结束的分析历史？运行中的任务和媒体库分析结果将保留。`)) void api.analysis.clearHistory().then(reload) }}>清除全部历史</button></div><div className="task-list" role="tabpanel">{analysis.length ? analysis.map(job => <AnalysisTask job={job} reload={reload} key={job.id} />) : <div className="empty">还没有分析任务</div>}</div></> : <div className="task-list" role="tabpanel">{batches.length ? batches.map(batch => <article className="batch" key={batch.id}><div className="row between"><strong>{batch.dispatchMode === 'local' ? '本地定时' : '抖音网页'} · {batch.id.slice(0, 8)}</strong><span className={`pill ${batch.status}`}>{taskNames[batch.status] || batch.status}</span></div><div className="publish-job publish-job-head"><span>作品</span><span>状态</span><span>本地提交时间</span><span>抖音发布时间</span><span>操作</span></div>{batch.jobs.map(job => <div className="publish-job" key={job.id}><span>{job.title}</span><span>{taskNames[job.status] || job.status}</span><span>{job.submitAt ? new Date(job.submitAt).toLocaleString() : job.executeAt ? new Date(job.executeAt).toLocaleString() : '—'}</span><span>{job.publishAt ? new Date(job.publishAt).toLocaleString() : batch.dispatchMode === 'local' ? '提交后立即发布' : '立即发布'}</span>{job.error ? <p className="error">{job.error}</p> : null}{job.screenshot ? <a target="_blank" href={`/api/publisher/artifacts/${encodeURIComponent(job.screenshot.split('/').pop()!)}`}>诊断截图</a> : null}{['failed', 'needs_login', 'needs_attention', 'interrupted', 'cancelled'].includes(job.status) ? <button onClick={() => void api.publisher.retry(job.id).then(reload)}>重试</button> : null}</div>)}{['queued', 'waiting_local', 'running'].includes(batch.status) ? <button className="danger-text" onClick={() => { if (window.confirm('确认取消该发布批次？已发布到抖音的作品不会撤回，未执行的任务将停止。')) void api.publisher.cancelBatch(batch.id).then(reload) }}>取消批次</button> : null}{['completed', 'partial', 'failed', 'needs_attention', 'interrupted', 'cancelled'].includes(batch.status) ? <button className="danger-text" onClick={() => { if (window.confirm('确认删除该批次历史及关联诊断记录？')) void api.publisher.deleteBatch(batch.id).then(reload) }}>删除历史</button> : null}</article>) : <div className="empty">还没有发布任务</div>}</div>}</section>
+  return <section className="panel task-panel">
+    <div className="task-tabs" role="tablist" aria-label="任务类型">
+      <button role="tab" aria-selected={taskTab === 'analysis'} className={taskTab === 'analysis' ? 'active' : ''} onClick={() => setTaskTab('analysis')}><strong>分析任务</strong><span>Codex 逐个执行</span><em>{analysis.length}</em></button>
+      <button role="tab" aria-selected={taskTab === 'publisher'} className={taskTab === 'publisher' ? 'active' : ''} onClick={() => setTaskTab('publisher')}><strong>抖音发布任务</strong><span>共用一个浏览器串行提交</span><em>{batches.length}</em></button>
+      {taskTab === 'publisher' ? <a target="_blank" rel="noreferrer" href="https://creator.douyin.com/creator-micro/content/manage">在抖音查看作品管理 ↗</a> : null}
+    </div>
+    {taskTab === 'analysis' ? <>
+      <div className="task-history-actions"><span>共 <span className="data">{analysis.length}</span> 条记录，<span className="data">{historyCount}</span> 条已结束</span><button className="danger-text" disabled={!historyCount} onClick={() => { if (window.confirm(`确认清除全部 ${historyCount} 条已结束的分析历史？运行中的任务和媒体库分析结果将保留。`)) void api.analysis.clearHistory().then(reload) }}>清除已结束的历史</button></div>
+      <div className="task-list" role="tabpanel">{analysis.length ? analysis.map(job => <AnalysisTask job={job} reload={reload} key={job.id} />) : <div className="empty"><strong>还没有分析任务</strong>在媒体库勾选视频后点击「分析」</div>}</div>
+    </> : <div className="task-list" role="tabpanel">{batches.length ? batches.map(batch => <PublishBatchCard batch={batch} reload={reload} key={batch.id} />) : <div className="empty"><strong>还没有发布任务</strong>在媒体库选择已分析的视频后点击「发布到抖音」</div>}</div>}
+  </section>
 }
+
+/* ------------------------------------------------------------- settings */
 
 function CodexLoginDetails({ status }: { status: CodexStatus }) {
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
@@ -192,9 +437,37 @@ function CodexRuntimeStatus({ status }: { status: CodexStatus }) {
   return <div className="codex-runtime"><div className="codex-runtime-grid"><div><span>当前模型</span><strong>{status.model}</strong></div><div><span>推理强度</span><strong>{status.reasoningEffort}</strong></div>{status.usage?.planType ? <div><span>账号套餐</span><strong>{status.usage.planType.toUpperCase()}</strong></div> : null}</div>{windows.map(window => <div className="codex-usage" key={window.key}><div className="row between"><span>{window.name}</span><strong>剩余 {window.remainingPercent}%</strong></div><div className="codex-usage-bar" role="progressbar" aria-label={window.name} aria-valuemin={0} aria-valuemax={100} aria-valuenow={window.remainingPercent}><i style={{ width: `${window.remainingPercent}%` }} /></div><small>已使用 {window.usedPercent}%{window.resetsAt ? ` · ${new Date(window.resetsAt * 1000).toLocaleString()} 重置` : ''}</small></div>)}{status.usage?.ordinaryUsageAllowed === false ? <p className="error">当前普通包含用量已不可用。</p> : null}{status.usageUnavailable ? <p className="muted">Codex 暂未返回剩余用量，可稍后刷新。</p> : null}</div>
 }
 
+const shortVersion = (value?: string) => value?.match(/\d+(\.\d+)+/)?.[0] || value || '已就绪'
+
 function SettingsPage({ tools, codex, browser, refresh, logout }: { tools: ToolStatus | null; codex: CodexStatus | null; browser: BrowserStatus | null; refresh: () => void; logout: () => void }) {
-  return <div className="settings-grid"><section className="panel settings-section"><h2>运行工具</h2>{tools?.tools.map(tool => <div className="status-row" key={tool.name}><span>{tool.name}</span><span className={`pill ${tool.available ? 'ready' : 'failed'}`}>{tool.available ? tool.version || '已就绪' : '不可用'}</span></div>)}<button onClick={() => void api.tools.update().then(refresh)}>安装 / 更新工具</button></section><section className="panel settings-section codex-settings"><h2>Codex 视频分析</h2><p>{codex?.message || '正在检查…'}</p>{codex ? <CodexRuntimeStatus status={codex} /> : null}{codex?.loginOutput && codex ? <CodexLoginDetails status={codex} /> : null}<div className="row"><button className="primary" disabled={!codex?.available || codex.busy || codex.authenticated} onClick={() => void api.codex.login().then(refresh)}>设备代码登录</button>{codex?.busy ? <button onClick={() => void api.codex.cancel().then(refresh)}>取消登录</button> : null}{codex?.authenticated ? <button onClick={() => void api.codex.logout().then(refresh)}>退出 Codex</button> : null}</div></section><section className="panel settings-section"><h2>抖音浏览器</h2><p>{browser?.message || '正在检查…'}</p><div className="row"><a className="button" target="_blank" rel="noreferrer" href={browser?.remoteUrl || '/remote-browser/vnc.html?autoconnect=1&resize=scale'}>{browser?.mode === 'host' ? '打开本地浏览器' : '打开远程浏览器'}</a><button className="primary" disabled={!browser?.ready} onClick={() => void api.publisher.login().then(refresh)}>登录抖音</button></div></section><section className="panel settings-section"><h2>安全</h2><p>媒体、任务与浏览器均受管理员会话保护。</p><button onClick={logout}>退出工作台</button></section></div>
+  return <div className="settings-grid">
+    <section className="panel settings-section">
+      <h2>运行工具</h2>
+      <p>下载与转码依赖的命令行工具。</p>
+      {tools?.tools.map(tool => <div className="status-row" key={tool.name}><span>{tool.name}</span><span className={`pill ${tool.available ? 'ready' : 'failed'}`} title={tool.version || tool.error}>{tool.available ? shortVersion(tool.version) : '不可用'}</span></div>)}
+      <button onClick={() => void api.tools.update().then(refresh)}>安装 / 更新工具</button>
+    </section>
+    <section className="panel settings-section codex-settings">
+      <h2>Codex 视频分析</h2>
+      <p>{codex?.message || '正在检查…'}</p>
+      {codex ? <CodexRuntimeStatus status={codex} /> : null}
+      {codex?.loginOutput && codex ? <CodexLoginDetails status={codex} /> : null}
+      <div className="row"><button className="primary" disabled={!codex?.available || codex.busy || codex.authenticated} onClick={() => void api.codex.login().then(refresh)}>设备代码登录</button>{codex?.busy ? <button onClick={() => void api.codex.cancel().then(refresh)}>取消登录</button> : null}{codex?.authenticated ? <button onClick={() => void api.codex.logout().then(refresh)}>退出 Codex</button> : null}</div>
+    </section>
+    <section className="panel settings-section">
+      <h2>抖音浏览器</h2>
+      <p>{browser?.message || '正在检查…'}</p>
+      <div className="row"><a className="button" target="_blank" rel="noreferrer" href={browser?.remoteUrl || '/remote-browser/vnc.html?autoconnect=1&resize=scale'}>{browser?.mode === 'host' ? '打开本地浏览器' : '打开远程浏览器'}</a><button className="primary" disabled={!browser?.ready} onClick={() => void api.publisher.login().then(refresh)}>登录抖音</button></div>
+    </section>
+    <section className="panel settings-section">
+      <h2>安全</h2>
+      <p>媒体、任务与浏览器均受管理员会话保护。</p>
+      <button onClick={logout}>退出工作台</button>
+    </section>
+  </div>
 }
+
+/* ------------------------------------------------------------------ app */
 
 function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null), [tab, setTab] = useState<Tab>(() => storedChoice(NAVIGATION_STORAGE_KEY, tabs, 'download')), [assets, setAssets] = useState<MediaAsset[]>([]), [analysisJobs, setAnalysisJobs] = useState<AnalysisJob[]>([]), [batches, setBatches] = useState<PublishBatch[]>([]), [downloads, setDownloads] = useState<DownloadJob[]>([]), [tools, setTools] = useState<ToolStatus | null>(null), [codex, setCodex] = useState<CodexStatus | null>(null), [browser, setBrowser] = useState<BrowserStatus | null>(null)
@@ -204,9 +477,35 @@ function App() {
   useEffect(() => { void api.auth.session().then(value => setAuthenticated(value.authenticated)).catch(() => setAuthenticated(false)) }, [])
   useEffect(() => { try { window.localStorage.setItem(NAVIGATION_STORAGE_KEY, tab) } catch { /* storage unavailable */ } }, [tab])
   useEffect(() => { if (!authenticated) return; loadLibrary(); loadTasks(); loadSettings(); return onEvent(raw => { const event = raw as WorkbenchEvent; if (event.type === 'library') loadLibrary(); if (event.type === 'analysis' || event.type === 'publisher') { loadLibrary(); loadTasks() } if (event.type === 'codex') loadSettings() }) }, [authenticated, loadLibrary, loadSettings, loadTasks])
+  useEffect(() => { if (!authenticated) return; void api.downloads.list().then(setDownloads); return onEvent(raw => { const event = raw as WorkbenchEvent; if (event.type === 'downloads') setDownloads(event.jobs) }) }, [authenticated])
+
+  const activeDownloads = downloads.filter(job => ['queued', 'downloading'].includes(job.status)).length
+  const unprocessed = useMemo(() => filterMediaAssets(assets, 'unprocessed', 'all', '').length, [assets])
+  const awaiting = useMemo(() => assets.filter(asset => !asset.analysis).length, [assets])
+  const runningTasks = analysisJobs.filter(job => ['queued', 'preparing', 'analyzing'].includes(job.status)).length + batches.filter(batch => ['queued', 'waiting_local', 'running'].includes(batch.status)).length
+  const attention = [...analysisJobs, ...batches].some(item => ['failed', 'needs_attention', 'interrupted'].includes(item.status))
+  const stages: Array<{ id: Tab; label: string; status: string; tone?: 'live' | 'alert' }> = [
+    { id: 'download', label: '下载', status: activeDownloads ? `${activeDownloads} 下载中` : '空闲', tone: activeDownloads ? 'live' : undefined },
+    { id: 'library', label: '媒体库', status: unprocessed ? `${unprocessed} 待审核` : awaiting ? `${awaiting} 待分析` : `${assets.length} 个视频` },
+    { id: 'tasks', label: '任务', status: attention ? '需要检查' : runningTasks ? `${runningTasks} 运行中` : '空闲', tone: attention ? 'alert' : runningTasks ? 'live' : undefined },
+  ]
+
   if (authenticated === null) return <div className="splash">正在启动工作台…</div>
   if (!authenticated) return <Login onLogin={() => setAuthenticated(true)} />
-  return <div className="app"><header><div className="brand"><div className="brand-mark">▶</div><div><h1>Social Video 工作台</h1><p>下载 · 分析 · 审核 · 发布</p></div></div><nav>{([['download', '下载'], ['library', '媒体库'], ['tasks', '任务'], ['settings', '设置']] as [Tab, string][]).map(([value, label]) => <button className={tab === value ? 'active' : ''} key={value} onClick={() => setTab(value)}>{label}{value === 'tasks' && [...analysisJobs, ...batches].some(item => ['failed', 'needs_attention', 'interrupted'].includes(item.status)) ? <i /> : null}</button>)}</nav></header><div className={tab === 'library' ? 'content library-content' : 'content'}>{tab === 'download' ? <DownloadPage jobs={downloads} setJobs={setDownloads} /> : tab === 'library' ? <LibraryPage assets={assets} reload={loadLibrary} openTasks={taskTab => { try { window.localStorage.setItem(TASK_TAB_STORAGE_KEY, taskTab) } catch { /* storage unavailable */ } setTab('tasks') }} /> : tab === 'tasks' ? <TasksPage analysis={analysisJobs} batches={batches} reload={loadTasks} /> : <SettingsPage tools={tools} codex={codex} browser={browser} refresh={loadSettings} logout={() => void api.auth.logout().then(() => setAuthenticated(false))} />}</div></div>
+  return <div className="app">
+    <header className="rail">
+      <div className="brand"><div className="brand-mark">▶</div><div><h1>Social Video 工作台</h1><p>下载 → 分析 → 审核 → 发布</p></div></div>
+      <nav className="stages" aria-label="工作流阶段">{stages.map(stage => <button className={`stage ${tab === stage.id ? 'active' : ''}`} key={stage.id} aria-current={tab === stage.id ? 'page' : undefined} onClick={() => setTab(stage.id)}><strong>{stage.label}</strong><span className={`stage-status ${stage.tone || ''}`}>{stage.status}</span></button>)}</nav>
+      <button className={`utility ${tab === 'settings' ? 'active' : ''}`} aria-current={tab === 'settings' ? 'page' : undefined} onClick={() => setTab('settings')}>设置</button>
+    </header>
+    <div className={tab === 'library' ? 'content library-content' : 'content'}>
+      {tab === 'download' ? <DownloadPage jobs={downloads} setJobs={setDownloads} />
+        : tab === 'library' ? <LibraryPage assets={assets} reload={loadLibrary} openTasks={taskTab => { try { window.localStorage.setItem(TASK_TAB_STORAGE_KEY, taskTab) } catch { /* storage unavailable */ } setTab('tasks') }} />
+        : tab === 'tasks' ? <TasksPage analysis={analysisJobs} batches={batches} reload={loadTasks} />
+        : <SettingsPage tools={tools} codex={codex} browser={browser} refresh={loadSettings} logout={() => void api.auth.logout().then(() => setAuthenticated(false))} />}
+    </div>
+    <Toaster />
+  </div>
 }
 
 export default App
