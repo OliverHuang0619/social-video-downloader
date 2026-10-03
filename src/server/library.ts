@@ -42,9 +42,30 @@ export class LibraryService {
     if (!resolved || !(await stat(resolved)).isFile() || !VIDEO_EXTENSIONS.has(path.extname(resolved).toLowerCase())) throw new Error('媒体文件不在允许范围内')
     return this.db.upsertAsset({ id: values.id || randomUUID(), file: resolved, filename: path.basename(resolved), sourceUrl: values.sourceUrl, platform: values.platform, uploader: values.uploader, duration: values.duration, thumbnail: values.thumbnail, publishedAt: values.publishedAt, processingState: values.processingState || 'unprocessed', analysis: values.analysis })
   }
+  async deleteAssets(ids: string[], deleteFiles: boolean) {
+    const unique = [...new Set(ids.map(String))].filter(Boolean)
+    if (!unique.length) throw new Error('请选择要删除的视频')
+    const assets = unique.map(id => this.db.asset(id)).filter((asset): asset is MediaAsset => Boolean(asset))
+    const busy = this.db.busyAssetIds(assets.map(asset => asset.id))
+    if (busy.size) throw new Error(`${busy.size} 个视频正在分析或发布中，请先取消相关任务`)
+    const count = this.db.deleteAssets(assets.map(asset => asset.id))
+    const thumbnails = path.join(process.env.SVD_CONFIG_DIR || '/config', 'thumbnails')
+    let deletedFiles = 0; const failed: string[] = []
+    for (const asset of assets) {
+      await rm(path.join(thumbnails, `${asset.id}.jpg`), { force: true })
+      if (!deleteFiles) continue
+      const file = await this.allowed(asset.file).catch(() => undefined)
+      if (!file) continue
+      try { await rm(file); deletedFiles++ } catch { failed.push(asset.filename) }
+    }
+    this.db.audit('library.delete', { ids: assets.map(asset => asset.id), deleteFiles, count, deletedFiles, failed })
+    return { count, deletedFiles, failed }
+  }
   async syncDownloads(jobs: DownloadJob[]) {
     for (const job of jobs) {
       this.db.saveDownload(job)
+      // Already registered once; skipping keeps a deliberately deleted asset from reappearing.
+      if (job.assetId) continue
       if (!job.outputPath || !['completed', 'skipped'].includes(job.status)) continue
       try {
         const asset = await this.registerFile(job.outputPath, { sourceUrl: job.item.sourceUrl, platform: job.item.platform, uploader: job.item.uploader, duration: job.item.duration, thumbnail: job.item.thumbnail, publishedAt: job.item.publishedAt })

@@ -255,6 +255,38 @@ function PublishDialog({ assets, close, done }: { assets: MediaAsset[]; close: (
 
 /* -------------------------------------------------------------- library */
 
+function DeleteDialog({ assets, close, done }: { assets: MediaAsset[]; close: () => void; done: () => void }) {
+  const [deleteFiles, setDeleteFiles] = useState(true), [busy, setBusy] = useState(false), [message, setMessage] = useState('')
+  const published = assets.filter(asset => asset.processingState === 'processed').length
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && !busy) close() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [busy, close])
+  const submit = async () => {
+    setBusy(true); setMessage('')
+    try {
+      const result = await api.library.remove(assets.map(asset => asset.id), deleteFiles)
+      toast(result.failed.length ? `已删除 ${result.count} 个视频，${result.failed.length} 个文件删除失败` : deleteFiles ? `已删除 ${result.count} 个视频及文件` : `已从媒体库移出 ${result.count} 个视频`, result.failed.length ? 'bad' : 'ok')
+      done()
+    } catch (error) { setMessage(errorText(error)); setBusy(false) }
+  }
+  return <div className="modal-bg" role="dialog" aria-modal="true" aria-label="删除视频" onMouseDown={() => { if (!busy) close() }}>
+    <div className="modal" onMouseDown={event => event.stopPropagation()}>
+      <div className="modal-head"><h2>删除 {assets.length} 个视频</h2><p>相关的分析结果与发布历史会一起删除，操作无法撤销。</p></div>
+      <ul className="delete-list">{assets.slice(0, 6).map(asset => <li key={asset.id}><span className="filename">{asset.filename}</span></li>)}{assets.length > 6 ? <li className="hint">还有 {assets.length - 6} 个…</li> : null}</ul>
+      <fieldset>
+        <legend>删除范围</legend>
+        <label className="check"><input type="checkbox" checked={deleteFiles} onChange={event => setDeleteFiles(event.target.checked)} />同时删除服务器上的视频文件</label>
+        <p className="hint">{deleteFiles ? '文件会从 /downloads 或 /imports 中永久删除。' : '只移出媒体库，文件保留；重新导入目录时会再次登记。'}</p>
+      </fieldset>
+      {published ? <p className="warning">其中 {published} 个已标为已处理，可能已发布到抖音。删除不会撤回抖音上的作品。</p> : null}
+      {message ? <p className="error">{message}</p> : null}
+      <div className="modal-foot"><button disabled={busy} onClick={close}>取消</button><button className="danger" disabled={busy} onClick={() => void submit()}>{busy ? '删除中…' : deleteFiles ? `删除 ${assets.length} 个视频及文件` : `移出媒体库`}</button></div>
+    </div>
+  </div>
+}
+
 const FirstFrame = memo(function FirstFrame({ asset }: { asset: MediaAsset }) {
   const [failed, setFailed] = useState(false)
   return failed
@@ -291,7 +323,7 @@ const AssetCard = memo(function AssetCard({ asset, selected, toggle, play, mark,
 })
 
 function LibraryPage({ assets, reload, openTasks }: { assets: MediaAsset[]; reload: () => void; openTasks: (taskTab: TaskTab) => void }) {
-  const [selected, setSelected] = useState<Set<string>>(new Set()), [queryInput, setQueryInput] = useState(''), [state, setState] = useState<LibraryStateFilter>('unprocessed'), [category, setCategory] = useState('all'), [directory, setDirectory] = useState('all'), [playing, setPlaying] = useState<MediaAsset>(), [publishing, setPublishing] = useState<MediaAsset[]>(), [importOpen, setImportOpen] = useState(false), [importPath, setImportPath] = useState('/downloads'), [importing, setImporting] = useState(false), [message, setMessage] = useState('')
+  const [selected, setSelected] = useState<Set<string>>(new Set()), [queryInput, setQueryInput] = useState(''), [state, setState] = useState<LibraryStateFilter>('unprocessed'), [category, setCategory] = useState('all'), [directory, setDirectory] = useState('all'), [playing, setPlaying] = useState<MediaAsset>(), [publishing, setPublishing] = useState<MediaAsset[]>(), [deleting, setDeleting] = useState<MediaAsset[]>(), [importOpen, setImportOpen] = useState(false), [importPath, setImportPath] = useState('/downloads'), [importing, setImporting] = useState(false), [message, setMessage] = useState('')
   const query = useDeferredValue(queryInput.trim())
   const categories = useMemo(() => [...new Set(assets.map(asset => asset.analysis?.category).filter(Boolean) as string[])].sort(), [assets])
   const directories = useMemo(() => [...new Set(assets.map(asset => mediaAssetDirectory(asset.file)))].sort(), [assets])
@@ -337,6 +369,7 @@ function LibraryPage({ assets, reload, openTasks }: { assets: MediaAsset[]; relo
         <button className="ghost" disabled={!visible.length} onClick={() => setSelected(allVisibleSelected ? new Set() : new Set(visible.map(asset => asset.id)))}>{allVisibleSelected ? '取消全选' : '全选当前结果'}</button>
         {selected.size ? <button className="ghost" onClick={() => setSelected(new Set())}>清空选择</button> : null}
         <span className="divider" />
+        <button className="danger-text" disabled={!chosen.length} onClick={() => setDeleting(chosen)}>删除</button>
         <button disabled={!chosen.length} onClick={() => void analyze()}>分析</button>
         <button disabled={!chosen.some(asset => asset.analysis)} onClick={() => void analyze(true)}>重新分析</button>
         <button className="primary" disabled={!chosen.length || chosen.some(asset => !asset.analysis)} title={chosen.some(asset => !asset.analysis) ? '所选视频需要先完成分析' : undefined} onClick={() => setPublishing(chosen)}>发布到抖音{chosen.length > 1 ? ` (${chosen.length})` : ''}</button>
@@ -347,6 +380,7 @@ function LibraryPage({ assets, reload, openTasks }: { assets: MediaAsset[]; relo
       : <section className="panel"><div className="empty">{assets.length ? <><strong>没有符合条件的视频</strong>试试切换状态、分类或目录，或清空搜索词</> : <><strong>媒体库是空的</strong>完成下载后视频会自动出现，也可以点击「导入目录」登记服务器上的文件</>}</div></section>}
     {playing ? <div className="modal-bg" role="dialog" aria-modal="true" aria-label="视频播放" onMouseDown={() => setPlaying(undefined)}><div className="modal player" onMouseDown={event => event.stopPropagation()}><button className="player-close" aria-label="关闭播放" title="关闭 (Esc)" onClick={() => setPlaying(undefined)}>×</button><h2>{playing.analysis?.title || playing.filename}</h2><video controls autoPlay src={api.library.mediaUrl(playing.id)} /><p className="filename">{playing.filename}</p></div></div> : null}
     {publishing ? <PublishDialog assets={publishing} close={() => setPublishing(undefined)} done={() => { setPublishing(undefined); openTasks('publisher') }} /> : null}
+    {deleting ? <DeleteDialog assets={deleting} close={() => setDeleting(undefined)} done={() => { setDeleting(undefined); setSelected(new Set()); reload() }} /> : null}
   </div>
 }
 

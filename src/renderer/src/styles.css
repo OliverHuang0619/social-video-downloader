@@ -114,6 +114,18 @@ button:focus-visible, .button:focus-visible, input:focus-visible, textarea:focus
 }
 .ghost:hover:not(:disabled) { background: var(--inset); color: var(--ink); border-color: transparent; }
 
+.danger {
+  border-color: transparent;
+  background: var(--bad);
+  color: #fff;
+  font-weight: 650;
+}
+.danger:hover:not(:disabled) { background: #f58080; border-color: transparent; }
+
+.delete-list { margin: 0 0 4px; padding: 10px 12px; list-style: none; display: grid; gap: 4px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--bg); }
+.delete-list li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.delete-list .filename { color: var(--ink-2); }
+
 .danger-text {
   border: 0;
   background: none;

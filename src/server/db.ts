@@ -94,6 +94,26 @@ export class AppDatabase {
   assetByFile(file: string) { const row = this.sqlite.prepare('SELECT * FROM media_assets WHERE file=?').get(file) as Record<string, unknown> | undefined; return row ? this.mapAsset(row) : undefined }
   setAssetState(id: string, state: MediaAsset['processingState']) { this.sqlite.prepare('UPDATE media_assets SET processing_state=?,updated_at=? WHERE id=?').run(state, new Date().toISOString(), id); return this.asset(id) }
   setAnalysis(id: string, analysis: AnalysisResult) { this.sqlite.prepare('UPDATE media_assets SET analysis_json=?,updated_at=? WHERE id=?').run(JSON.stringify(analysis), new Date().toISOString(), id) }
+  /** Assets referenced by an analysis job or publish job that is still running. */
+  busyAssetIds(ids: string[]) {
+    const wanted = new Set(ids), busy = new Set<string>()
+    for (const row of this.sqlite.prepare("SELECT asset_ids FROM analysis_jobs WHERE status IN ('queued','preparing','analyzing')").all() as { asset_ids: string }[]) for (const id of JSON.parse(row.asset_ids) as string[]) if (wanted.has(id)) busy.add(id)
+    for (const row of this.sqlite.prepare("SELECT asset_id FROM publish_jobs WHERE status IN ('queued','waiting_local','launching','uploading','scheduling','waiting_covers','submitting')").all() as { asset_id: string }[]) if (wanted.has(row.asset_id)) busy.add(row.asset_id)
+    return busy
+  }
+  /** Removes assets together with their publish history; batches left empty are removed too. */
+  deleteAssets(ids: string[]) {
+    if (!ids.length) return 0
+    this.sqlite.exec('BEGIN')
+    try {
+      const placeholders = ids.map(() => '?').join(',')
+      this.sqlite.prepare(`DELETE FROM publish_jobs WHERE asset_id IN (${placeholders})`).run(...ids)
+      this.sqlite.exec('DELETE FROM publish_batches WHERE NOT EXISTS (SELECT 1 FROM publish_jobs WHERE batch_id=publish_batches.id)')
+      const count = this.sqlite.prepare(`DELETE FROM media_assets WHERE id IN (${placeholders})`).run(...ids).changes
+      this.sqlite.exec('COMMIT')
+      return count
+    } catch (error) { this.sqlite.exec('ROLLBACK'); throw error }
+  }
 
   saveDownload(job: DownloadJob) { this.sqlite.prepare('INSERT INTO download_jobs(id,payload,updated_at) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at').run(job.id, JSON.stringify(job), new Date().toISOString()) }
   downloads() { return (this.sqlite.prepare('SELECT payload FROM download_jobs ORDER BY updated_at DESC').all() as { payload: string }[]).map(row => JSON.parse(row.payload) as DownloadJob) }

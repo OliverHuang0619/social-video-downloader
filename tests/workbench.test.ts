@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -67,6 +67,26 @@ describe('工作台持久化与安全边界', () => {
     expect(db.deletePublishBatch('batch-active')).toBe(false)
     db.updatePublishJob('batch-active-001', 'published'); db.updatePublishBatch('batch-active', 'completed')
     expect(db.deletePublishBatch('batch-active')).toBe(true)
+  })
+
+  it('媒体库可批量删除所选视频，但保护正在分析或发布的视频', async () => {
+    const keep = path.join(downloads, 'delete-keep.mp4'), gone = path.join(downloads, 'delete-gone.mp4'), busyFile = path.join(downloads, 'delete-busy.mp4')
+    for (const file of [keep, gone, busyFile]) writeFileSync(file, 'x')
+    const [kept, removed, busy] = await Promise.all([library.registerFile(keep), library.registerFile(gone), library.registerFile(busyFile)])
+    const now = new Date().toISOString()
+    db.createAnalysis({ id: 'analysis-busy', status: 'analyzing', assetIds: [busy.id], progress: 50, message: '分析中', processedItems: 0, totalItems: 1, logs: [], createdAt: now, updatedAt: now }, path.join(config, 'analysis-busy'))
+    db.createPublishBatch({ id: 'batch-deleted', dispatchMode: 'platform', status: 'completed', createdAt: now, updatedAt: now, jobs: [{ id: 'batch-deleted-001', batchId: 'batch-deleted', assetId: removed.id, title: 'Gone', topics: [], aigc: true, waitForCovers: false, status: 'published' }] })
+    await expect(library.deleteAssets([removed.id, busy.id], true)).rejects.toThrow('正在分析或发布')
+    expect(db.asset(removed.id)).toBeTruthy()
+    const result = await library.deleteAssets([removed.id], true)
+    expect(result).toEqual({ count: 1, deletedFiles: 1, failed: [] })
+    expect(db.asset(removed.id)).toBeUndefined()
+    expect(existsSync(gone)).toBe(false)
+    expect(db.publishBatches().some(batch => batch.id === 'batch-deleted')).toBe(false)
+    expect(await library.deleteAssets([kept.id], false)).toEqual({ count: 1, deletedFiles: 0, failed: [] })
+    expect(existsSync(keep)).toBe(true)
+    expect(db.asset(busy.id)).toBeTruthy()
+    db.updateAnalysis('analysis-busy', { status: 'cancelled' })
   })
 
   it('抖音发布成功时立即把媒体标记为已处理', async () => {

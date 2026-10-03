@@ -71,6 +71,7 @@ async function api(request: IncomingMessage, response: ServerResponse, url: URL)
   if (request.method === 'POST' && pathname === '/api/downloads/retry') { queue.retry((await body<{ id: string }>(request)).id); return json(response, 200, null) }
   if (request.method === 'GET' && pathname === '/api/library') return json(response, 200, db.assets())
   if (request.method === 'POST' && pathname === '/api/library/import') return json(response, 200, await library.importDirectory(String((await body<{ directory: string }>(request)).directory || '')))
+  if (request.method === 'POST' && pathname === '/api/library/delete') { const value = await body<{ ids: string[]; deleteFiles?: boolean }>(request); const result = await library.deleteAssets(Array.isArray(value.ids) ? value.ids : [], Boolean(value.deleteFiles)); changed('library'); return json(response, 200, result) }
   const stateMatch = request.method === 'POST' && pathname.match(/^\/api\/library\/([^/]+)\/state$/)
   if (stateMatch) { const value = await body<{ state: 'processed' | 'unprocessed' }>(request); if (!['processed', 'unprocessed'].includes(value.state)) throw new Error('处理状态无效'); return json(response, 200, db.setAssetState(stateMatch[1], value.state)) }
   const thumbnailMatch = request.method === 'GET' && pathname.match(/^\/api\/library\/([^/]+)\/thumbnail$/); if (thumbnailMatch) return library.thumbnail(thumbnailMatch[1], response)
