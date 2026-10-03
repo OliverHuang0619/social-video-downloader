@@ -509,3 +509,10 @@ try {
   emit("error", { message: String(error?.message || error) });
   process.exitCode = 1;
 }
+
+// connectOverCDP keeps a websocket handle alive even after the working page has
+// closed. Flush the final JSON event, then disconnect this helper process without
+// closing the user's persistent Chrome instance.
+const exitCode = process.exitCode || 0;
+await new Promise(resolve => process.stdout.write("", resolve));
+process.exit(exitCode);

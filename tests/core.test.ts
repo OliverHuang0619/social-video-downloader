@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildFormatArgs, detectPlatform, filterMediaAssets, formatsFromYtDlp, mediaAssetDirectory, normalizeUrls, sanitizeFilename } from '../src/shared/core'
+import { automaticPlatformPublishTimes, buildFormatArgs, detectPlatform, filterMediaAssets, formatsFromYtDlp, localPublishSubmissionTimes, mediaAssetDirectory, nextSafePlatformPublishTime, normalizePublishTopics, normalizeUrls, randomPublishSubmissionDelayMs, sanitizeFilename } from '../src/shared/core'
 import { buildOutputTemplate, DownloadQueue, parseDownloadOutput } from '../src/main/queue'
 import { classifyError, mediaFromGalleryDlLine, youtubeAttemptSources, youtubeCookieArgs } from '../src/main/media'
 import { CodexService, cleanCodexOutput, parseCodexLoginOutput, parseCodexRateLimits, resolveCodexAnalysisConfig } from '../src/server/codex'
@@ -68,6 +68,35 @@ describe('媒体库筛选', () => {
     expect(mediaAssetDirectory('C:\\downloads\\course-a\\lesson.mp4')).toBe('C:/downloads/course-a')
     expect(filterMediaAssets(assets, 'all', 'all', '', '/downloads/course-a')).toEqual([course])
     expect(filterMediaAssets(assets, 'processed', 'all', '', '/downloads/course-a/unit-2')).toEqual([nested])
+  })
+})
+
+describe('抖音自动排期', () => {
+  it('发布话题固定包含英语启蒙并排除标题及其截断版本', () => {
+    expect(normalizePublishTopics('The Cost of Using the Wrong Na', ['叫错名字的代价', 'The Cost of Using the Wrong Name', '#基础问答', '英语启蒙'])).toEqual(['英语启蒙', '叫错名字的代价', '基础问答'])
+  })
+
+  it('首条立即发布，后续从两小时后开始按配置间隔排期', () => {
+    const now = new Date('2026-10-03T04:06:30.000Z')
+    expect(automaticPlatformPublishTimes(4, 1, now)).toEqual([
+      undefined,
+      '2026-10-03T06:15:00.000Z',
+      '2026-10-03T07:15:00.000Z',
+      '2026-10-03T08:15:00.000Z',
+    ])
+    expect(nextSafePlatformPublishTime(now)).toBe('2026-10-03T06:15:00.000Z')
+  })
+
+  it('本地浏览器提交相邻作品时随机等待一至三分钟', () => {
+    expect(randomPublishSubmissionDelayMs(() => 0)).toBe(60_000)
+    expect(randomPublishSubmissionDelayMs(() => 0.5)).toBe(120_000)
+    expect(randomPublishSubmissionDelayMs(() => 0.999)).toBe(180_000)
+    const values = [0, 0.999]
+    expect(localPublishSubmissionTimes(3, new Date('2026-10-03T04:06:30.000Z'), () => values.shift()!)).toEqual([
+      '2026-10-03T04:06:30.000Z',
+      '2026-10-03T04:07:30.000Z',
+      '2026-10-03T04:10:30.000Z',
+    ])
   })
 })
 

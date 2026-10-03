@@ -120,6 +120,7 @@ export interface PublishJob {
   topics: string[]
   publishAt?: string
   executeAt?: string
+  submitAt?: string
   aigc: boolean
   waitForCovers: boolean
   status: PublishJobStatus

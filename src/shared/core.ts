@@ -37,6 +37,63 @@ export function filterMediaAssets(assets: MediaAsset[], state: LibraryStateFilte
   )
 }
 
+const comparablePublishText = (value: string) => value.normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
+
+export function normalizePublishTopics(title: string, topics: string[]): string[] {
+  const titleKey = comparablePublishText(title)
+  const repeatsTitle = (topic: string) => {
+    const topicKey = comparablePublishText(topic)
+    if (!topicKey || !titleKey) return false
+    return topicKey === titleKey || (Math.min(topicKey.length, titleKey.length) >= 8 && (topicKey.startsWith(titleKey) || titleKey.startsWith(topicKey)))
+  }
+  const result = ['英语启蒙']
+  const seen = new Set(result.map(comparablePublishText))
+  for (const raw of topics) {
+    const topic = raw.trim().replace(/^#+/, '')
+    const key = comparablePublishText(topic)
+    if (!topic || seen.has(key) || repeatsTitle(topic)) continue
+    result.push(topic)
+    seen.add(key)
+    if (result.length === 5) break
+  }
+  return result
+}
+
+export function automaticPlatformPublishTimes(count: number, intervalHours: number, now = new Date()): Array<string | undefined> {
+  if (count <= 0) return []
+  const result: Array<string | undefined> = [undefined]
+  if (count === 1) return result
+  let scheduledAt = new Date(nextSafePlatformPublishTime(now)).getTime()
+  result.push(new Date(scheduledAt).toISOString())
+  const interval = Math.max(1, intervalHours) * 3600_000
+  while (result.length < count) {
+    scheduledAt += interval
+    result.push(new Date(scheduledAt).toISOString())
+  }
+  return result
+}
+
+export function nextSafePlatformPublishTime(now = new Date()): string {
+  // Douyin requires roughly two hours of lead time. Leave enough room for the
+  // queued browser submission and upload, then align to its five-minute picker.
+  const fiveMinutes = 5 * 60_000
+  return new Date(Math.ceil((now.getTime() + 2 * 3600_000 + 5 * 60_000) / fiveMinutes) * fiveMinutes).toISOString()
+}
+
+export function randomPublishSubmissionDelayMs(random = Math.random): number {
+  return (1 + Math.min(2, Math.max(0, Math.floor(random() * 3)))) * 60_000
+}
+
+export function localPublishSubmissionTimes(count: number, now = new Date(), random = Math.random): string[] {
+  const result: string[] = []
+  let submitAt = now.getTime()
+  for (let index = 0; index < count; index++) {
+    if (index > 0) submitAt += randomPublishSubmissionDelayMs(random)
+    result.push(new Date(submitAt).toISOString())
+  }
+  return result
+}
+
 export function detectPlatform(url: string): Platform {
   const host = new URL(url).hostname.replace(/^www\./, '')
   if (host === 'youtu.be' || host.endsWith('youtube.com')) return 'youtube'

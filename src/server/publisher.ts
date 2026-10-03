@@ -3,13 +3,13 @@ import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { mkdir, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { localPublishSubmissionTimes, nextSafePlatformPublishTime, normalizePublishTopics } from '../shared/core'
 import type { BrowserStatus, PublishBatch, PublishJob } from '../shared/types'
 import type { AppDatabase } from './db'
 
 type PublishInput = { assetId: string; title: string; topics: string[]; publishAt?: string; aigc?: boolean; waitForCovers?: boolean }
 const terminal = new Set(['published', 'scheduled', 'failed', 'needs_login', 'needs_attention', 'interrupted', 'cancelled'])
 const cancellable = new Set(['queued', 'waiting_local', 'launching', 'uploading', 'scheduling', 'waiting_covers', 'submitting'])
-const sleep = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds))
 
 function loadBrowserToken(mode: BrowserStatus['mode']) {
   if (mode !== 'host') return ''
@@ -19,7 +19,9 @@ function loadBrowserToken(mode: BrowserStatus['mode']) {
 
 export class PublisherService {
   private running = false
+  private pumpQueued = false
   private wakeTimer?: NodeJS.Timeout
+  private safetyTimer?: NodeJS.Timeout
   private loginRunning = false
   private loginStatus: BrowserStatus['loginStatus'] = 'unknown'
   private message = '尚未检查抖音登录状态'
@@ -32,7 +34,11 @@ export class PublisherService {
   private browserMode: BrowserStatus['mode'] = process.env.SVD_BROWSER_MODE === 'host' ? 'host' : 'container'
   private browserUrl = process.env.SVD_BROWSER_CDP || 'http://browser:9222'
   private browserToken = loadBrowserToken(this.browserMode)
-  constructor(private db: AppDatabase, private changed: () => void) { void this.resume() }
+  constructor(private db: AppDatabase, private changed: () => void) {
+    void this.resume()
+    this.safetyTimer = setInterval(() => { void this.pump() }, 15_000)
+    this.safetyTimer.unref?.()
+  }
   async status(): Promise<BrowserStatus> {
     let ready = false
     try { const response = await fetch(`${this.browserUrl}/json/version`, { headers: this.browserToken ? { authorization: `Bearer ${this.browserToken}` } : undefined, signal: AbortSignal.timeout(2500) }); ready = response.ok } catch { /* browser offline */ }
@@ -53,10 +59,17 @@ export class PublisherService {
     if (!['platform', 'local'].includes(dispatchMode)) throw new Error('发布方式无效')
     if (dispatchMode === 'local' && jobs.length === 1) throw new Error('本地定时仅用于批量发布')
     if (idempotencyKey) { const existing = this.db.meta(`publish:${idempotencyKey}`); if (existing) return this.db.publishBatches().find(batch => batch.id === existing)! }
-    const now = new Date(), id = randomUUID(), items: PublishJob[] = jobs.map((input, index) => {
+    const now = new Date(), id = randomUUID()
+    const configuredCooldown = process.env.SVD_PUBLISH_COOLDOWN_MS
+    const submissionTimes = dispatchMode === 'platform'
+      ? configuredCooldown === undefined
+        ? localPublishSubmissionTimes(jobs.length, now)
+        : jobs.map((_, index) => new Date(now.getTime() + index * Math.max(0, Number(configuredCooldown) || 0)).toISOString())
+      : []
+    const items: PublishJob[] = jobs.map((input, index) => {
       const asset = this.db.asset(input.assetId); if (!asset) throw new Error('视频不存在')
-      const title = input.title.trim(), topics = [...new Set(input.topics.map(value => value.trim().replace(/^#+/, '')).filter(Boolean))].slice(0, 5)
-      if (!title || [...title].length > 30 || !topics.length) throw new Error('标题必须为 1–30 字符，话题必须为 1–5 个')
+      const title = input.title.trim(), topics = normalizePublishTopics(title, input.topics)
+      if (!title || [...title].length > 30) throw new Error('标题必须为 1–30 字符')
       let publishAt: string | undefined, executeAt: string | undefined
       if (input.publishAt) {
         const date = new Date(input.publishAt); if (Number.isNaN(date.getTime())) throw new Error('发布时间无效')
@@ -64,8 +77,9 @@ export class PublisherService {
         if (date.getTime() < now.getTime() + minimum) throw new Error(dispatchMode === 'local' ? '本地定时至少提前 1 分钟' : '平台排期至少提前 2 小时')
         if (dispatchMode === 'platform' && date.getTime() > now.getTime() + 7 * 24 * 3600_000) throw new Error('平台排期不能超过 7 天')
         if (dispatchMode === 'local') executeAt = date.toISOString(); else publishAt = date.toISOString()
-      } else if (dispatchMode === 'local' || jobs.length > 1) throw new Error('批量发布必须指定首条时间')
-      return { id: `${id}-${String(index + 1).padStart(3, '0')}`, batchId: id, assetId: asset.id, title, topics, publishAt, executeAt, aigc: input.aigc !== false, waitForCovers: input.waitForCovers === true, status: dispatchMode === 'local' ? 'waiting_local' : 'queued' }
+      } else if (dispatchMode === 'local' || (jobs.length > 1 && index > 0)) throw new Error('批量发布除首条立即发布外，其余任务必须指定排期时间')
+      const submitAt = dispatchMode === 'local' ? executeAt : submissionTimes[index]
+      return { id: `${id}-${String(index + 1).padStart(3, '0')}`, batchId: id, assetId: asset.id, title, topics, publishAt, executeAt, submitAt, aigc: input.aigc !== false, waitForCovers: input.waitForCovers === true, status: dispatchMode === 'local' ? 'waiting_local' : 'queued' }
     })
     const batch: PublishBatch = { id, dispatchMode, status: dispatchMode === 'local' ? 'waiting_local' : 'queued', createdAt: now.toISOString(), updatedAt: now.toISOString(), jobs: items }
     this.db.createPublishBatch(batch); if (idempotencyKey) this.db.setMeta(`publish:${idempotencyKey}`, id); this.db.audit('publish.created', { id, count: items.length, dispatchMode }); if (this.wakeTimer) clearTimeout(this.wakeTimer); this.wakeTimer = undefined; void this.pump(); this.changed(); return batch
@@ -74,7 +88,18 @@ export class PublisherService {
     const batch = this.db.publishBatches().find(value => value.jobs.some(job => job.id === jobId)); const job = batch?.jobs.find(value => value.id === jobId)
     if (!batch || !job || !['failed', 'needs_login', 'needs_attention', 'interrupted', 'cancelled'].includes(job.status)) throw new Error('该任务不能重试')
     this.cancelledBatches.delete(batch.id)
-    this.db.updatePublishJob(job.id, batch.dispatchMode === 'local' && job.executeAt && new Date(job.executeAt) > new Date() ? 'waiting_local' : 'queued')
+    const retryable = batch.jobs.filter(value => value.id === job.id || (value.id > job.id && value.status === 'interrupted' && value.error === '前一任务需要人工处理，批次已停止'))
+    const configuredCooldown = process.env.SVD_PUBLISH_COOLDOWN_MS
+    const retryNow = new Date()
+    const submissionTimes = batch.dispatchMode === 'platform'
+      ? configuredCooldown === undefined
+        ? localPublishSubmissionTimes(retryable.length, retryNow)
+        : retryable.map((_, index) => new Date(retryNow.getTime() + index * Math.max(0, Number(configuredCooldown) || 0)).toISOString())
+      : []
+    retryable.forEach((value, index) => {
+      const publishAt = batch.dispatchMode === 'platform' && value.publishAt && new Date(value.publishAt).getTime() < Date.now() + 2 * 3600_000 + 60_000 ? nextSafePlatformPublishTime() : undefined
+      this.db.updatePublishJob(value.id, batch.dispatchMode === 'local' && value.executeAt && new Date(value.executeAt) > new Date() ? 'waiting_local' : 'queued', { publishAt, submitAt: submissionTimes[index] })
+    })
     this.db.updatePublishBatch(batch.id, batch.dispatchMode === 'local' ? 'waiting_local' : 'queued'); void this.pump(); this.changed()
   }
   cancelBatch(id: string) {
@@ -107,26 +132,58 @@ export class PublisherService {
     return 'failed'
   }
   private async resume() { await mkdir(this.artifactDir, { recursive: true }); await mkdir(this.tempDir, { recursive: true }); await this.pump() }
+  private scheduleWake(delayMs: number) {
+    if (this.wakeTimer) clearTimeout(this.wakeTimer)
+    // Cap each timer so we re-check often even if the clock drifts or a wake is missed.
+    const wait = Math.max(50, Math.min(delayMs, 15_000))
+    this.wakeTimer = setTimeout(() => { this.wakeTimer = undefined; void this.pump() }, wait)
+    this.wakeTimer.unref?.()
+  }
+  private recoverStuckBatches() {
+    for (const batch of this.db.publishBatches()) {
+      if (batch.status !== 'running') continue
+      if (this.activeBatchId === batch.id) continue
+      const pending = batch.jobs.some(job => ['queued', 'waiting_local'].includes(job.status))
+      this.db.updatePublishBatch(batch.id, pending ? (batch.dispatchMode === 'local' ? 'waiting_local' : 'queued') : this.finalizeBatchStatus(batch.id))
+      this.changed()
+    }
+  }
   private async pump() {
-    if (this.running) return; this.running = true
+    if (this.running) { this.pumpQueued = true; return }
+    this.running = true
     let nextWake: number | undefined
     try {
+      this.recoverStuckBatches()
       for (const batch of this.db.publishBatches().reverse()) {
         if (!['queued', 'waiting_local'].includes(batch.status) || this.cancelledBatches.has(batch.id)) continue
-        this.db.updatePublishBatch(batch.id, batch.dispatchMode === 'local' ? 'waiting_local' : 'running')
         let deferred = false
         for (const original of batch.jobs) {
           if (this.cancelledBatches.has(batch.id)) break
           const current = this.db.publishBatches().find(value => value.id === batch.id)!.jobs.find(value => value.id === original.id)!
           if (!['queued', 'waiting_local'].includes(current.status)) continue
-          if (current.executeAt) {
-            const delay = new Date(current.executeAt).getTime() - Date.now()
-            if (delay > 0) { this.db.updatePublishJob(current.id, 'waiting_local'); nextWake = Math.min(nextWake ?? delay, delay); deferred = true; this.changed(); break }
+          const readyAt = current.submitAt || current.executeAt
+          if (readyAt) {
+            const delay = new Date(readyAt).getTime() - Date.now()
+            if (delay > 0) {
+              this.db.updatePublishJob(current.id, 'waiting_local')
+              this.db.updatePublishBatch(batch.id, 'waiting_local')
+              nextWake = Math.min(nextWake ?? delay, delay)
+              deferred = true
+              this.changed()
+              break
+            }
           }
-          const ok = await this.runJob(current)
+          let runnable = current
+          if (batch.dispatchMode === 'platform' && current.publishAt && new Date(current.publishAt).getTime() < Date.now() + 2 * 3600_000 + 60_000) {
+            const publishAt = nextSafePlatformPublishTime()
+            this.db.updatePublishJob(current.id, current.status, { publishAt })
+            runnable = { ...current, publishAt }
+          }
+          this.db.updatePublishBatch(batch.id, 'running')
+          this.changed()
+          const ok = await this.runJob(runnable)
           if (this.cancelledBatches.has(batch.id)) break
           if (!ok) { for (const rest of batch.jobs.filter(value => value.id > current.id && !terminal.has(value.status))) this.db.updatePublishJob(rest.id, 'interrupted', { error: '前一任务需要人工处理，批次已停止' }); break }
-          await sleep(Number(process.env.SVD_PUBLISH_COOLDOWN_MS || 30_000))
         }
         if (this.cancelledBatches.has(batch.id)) {
           this.db.updatePublishBatch(batch.id, this.finalizeBatchStatus(batch.id))
@@ -139,7 +196,11 @@ export class PublisherService {
       }
     } finally {
       this.running = false
-      if (nextWake !== undefined && !this.wakeTimer) this.wakeTimer = setTimeout(() => { this.wakeTimer = undefined; void this.pump() }, Math.max(1000, nextWake))
+      if (nextWake !== undefined) this.scheduleWake(nextWake)
+      if (this.pumpQueued) {
+        this.pumpQueued = false
+        void this.pump()
+      }
     }
   }
   private async runJob(job: PublishJob) {
@@ -171,10 +232,21 @@ export class PublisherService {
   }
   private execute(args: string[], onEvent: (event: Record<string, unknown>) => void, batchId?: string) {
     return new Promise<void>(resolve => {
-      const child = spawn('node', [this.script, ...args], { env: { ...process.env, DOUYIN_CDP_URL: this.browserUrl, DOUYIN_CDP_TOKEN: this.browserToken }, windowsHide: true }); let buffer = ''
+      const child = spawn('node', [this.script, ...args], { env: { ...process.env, DOUYIN_CDP_URL: this.browserUrl, DOUYIN_CDP_TOKEN: this.browserToken }, windowsHide: true }); let buffer = '', terminalTimer: NodeJS.Timeout | undefined
       if (batchId) { this.activeChild = child; this.activeBatchId = batchId }
-      const finish = () => { if (batchId && this.activeChild === child) { this.activeChild = undefined; this.activeBatchId = undefined } resolve() }
-      const consume = (value: Buffer) => { buffer += value.toString(); const lines = buffer.split(/\r?\n/); buffer = lines.pop() || ''; for (const line of lines) { try { onEvent(JSON.parse(line)) } catch { /* ignore browser diagnostics */ } } }
+      const finish = () => { if (terminalTimer) clearTimeout(terminalTimer); if (batchId && this.activeChild === child) { this.activeChild = undefined; this.activeBatchId = undefined } resolve() }
+      const consumeEvent = (event: Record<string, unknown>) => {
+        onEvent(event)
+        // A remote CDP websocket can keep Node alive after the page has closed. Once
+        // the publisher reports a terminal result, give cleanup a short grace period
+        // and then release the queue even if that connection is still holding open.
+        if (batchId && ['published', 'scheduled', 'error'].includes(String(event.event)) && !terminalTimer) {
+          const grace = Math.max(50, Number(process.env.SVD_PUBLISH_TERMINAL_GRACE_MS || 5_000) || 5_000)
+          terminalTimer = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM') }, grace)
+          terminalTimer.unref?.()
+        }
+      }
+      const consume = (value: Buffer) => { buffer += value.toString(); const lines = buffer.split(/\r?\n/); buffer = lines.pop() || ''; for (const line of lines) { try { consumeEvent(JSON.parse(line)) } catch { /* ignore browser diagnostics */ } } }
       child.stdout.on('data', consume); child.stderr.on('data', consume); child.on('error', error => { onEvent({ event: 'error', message: error.message }); finish() }); child.on('close', () => { if (buffer.trim()) { try { onEvent(JSON.parse(buffer)) } catch { /* ignore */ } } finish() })
     })
   }

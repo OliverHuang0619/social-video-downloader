@@ -93,6 +93,86 @@ describe('工作台持久化与安全边界', () => {
     for (let index = 0; index < 50 && db.publishBatches().find(value => value.id === coverBatch.id)?.status !== 'completed'; index += 1) await new Promise(resolve => setTimeout(resolve, 20))
   })
 
+  it('平台批量发布允许首条立即发布，其余任务使用排期', async () => {
+    const skill = path.join(root, 'publisher-auto-schedule-skill'), scripts = path.join(skill, 'scripts')
+    mkdirSync(scripts, { recursive: true })
+    writeFileSync(path.join(scripts, 'douyin_publisher.mjs'), `import fs from 'node:fs'; const job=JSON.parse(fs.readFileSync(process.argv[3],'utf8')); process.stdout.write(JSON.stringify({event:job.publishAt?'scheduled':'published'})+'\\n')`)
+    process.env.SVD_SKILL_DIR = skill
+    process.env.SVD_PUBLISH_COOLDOWN_MS = '120'
+    const file = path.join(downloads, 'auto-schedule.mp4'); writeFileSync(file, '')
+    const asset = await library.registerFile(file)
+    const { PublisherService } = await import('../src/server/publisher')
+    const publisher = new PublisherService(db, () => undefined)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const secondAt = new Date(Date.now() + 2 * 3600_000 + 2 * 60_000).toISOString()
+    const thirdAt = new Date(new Date(secondAt).getTime() + 3600_000).toISOString()
+    const batch = publisher.create([
+      { assetId: asset.id, title: 'Publish Now', topics: ['English'] },
+      { assetId: asset.id, title: 'Publish Later', topics: ['English'], publishAt: secondAt },
+      { assetId: asset.id, title: 'Publish Shortly After', topics: ['English'], publishAt: thirdAt },
+    ], 'platform')
+    expect(batch.dispatchMode).toBe('platform')
+    expect(batch.jobs[0].publishAt).toBeUndefined()
+    expect(batch.jobs[1].publishAt).toBe(secondAt)
+    expect(batch.jobs[2].publishAt).toBe(thirdAt)
+    expect(batch.jobs.every(job => job.executeAt === undefined)).toBe(true)
+    expect(batch.jobs.every(job => job.submitAt !== undefined)).toBe(true)
+    expect(new Date(batch.jobs[1].submitAt!).getTime()).toBeGreaterThan(Date.now())
+    for (let index = 0; index < 80 && db.publishBatches().find(value => value.id === batch.id)?.status !== 'completed'; index += 1) await new Promise(resolve => setTimeout(resolve, 50))
+    const persisted = db.publishBatches().find(value => value.id === batch.id)!
+    expect(persisted.jobs.map(job => job.status)).toEqual(['published', 'scheduled', 'scheduled'])
+    expect(persisted.jobs.every(job => job.submitAt !== undefined)).toBe(true)
+  })
+
+  it('发布脚本报告成功但连接未退出时仍继续后续任务', async () => {
+    const skill = path.join(root, 'publisher-hanging-cdp-skill'), scripts = path.join(skill, 'scripts')
+    mkdirSync(scripts, { recursive: true })
+    writeFileSync(path.join(scripts, 'douyin_publisher.mjs'), `import fs from 'node:fs'; const job=JSON.parse(fs.readFileSync(process.argv[3],'utf8')); process.stdout.write(JSON.stringify({event:job.publishAt?'scheduled':'published'})+'\\n'); setInterval(()=>{},1000)`)
+    process.env.SVD_SKILL_DIR = skill
+    process.env.SVD_PUBLISH_COOLDOWN_MS = '0'
+    process.env.SVD_PUBLISH_TERMINAL_GRACE_MS = '50'
+    const file = path.join(downloads, 'hanging-cdp.mp4'); writeFileSync(file, '')
+    const asset = await library.registerFile(file)
+    const { PublisherService } = await import('../src/server/publisher')
+    const publisher = new PublisherService(db, () => undefined)
+    const publishAt = new Date(Date.now() + 2 * 3600_000 + 60_000).toISOString()
+    const batch = publisher.create([
+      { assetId: asset.id, title: 'First Publish', topics: ['English'] },
+      { assetId: asset.id, title: 'Second Publish', topics: ['English'], publishAt },
+    ], 'platform')
+    for (let index = 0; index < 50 && db.publishBatches().find(value => value.id === batch.id)?.status !== 'completed'; index += 1) await new Promise(resolve => setTimeout(resolve, 20))
+    const persisted = db.publishBatches().find(value => value.id === batch.id)!
+    expect(persisted.status).toBe('completed')
+    expect(persisted.jobs.map(job => job.status)).toEqual(['published', 'scheduled'])
+    delete process.env.SVD_PUBLISH_TERMINAL_GRACE_MS
+  })
+
+  it('重试失败任务时刷新过近排期并恢复被连带中断的后续任务', async () => {
+    const skill = path.join(root, 'publisher-retry-skill'), scripts = path.join(skill, 'scripts')
+    mkdirSync(scripts, { recursive: true })
+    writeFileSync(path.join(scripts, 'douyin_publisher.mjs'), `import fs from 'node:fs'; const job=JSON.parse(fs.readFileSync(process.argv[3],'utf8')); process.stdout.write(JSON.stringify({event:job.publishAt?'scheduled':'published'})+'\\n')`)
+    process.env.SVD_SKILL_DIR = skill
+    process.env.SVD_PUBLISH_COOLDOWN_MS = '0'
+    const file = path.join(downloads, 'retry-schedule.mp4'); writeFileSync(file, '')
+    const asset = await library.registerFile(file)
+    const now = new Date().toISOString(), stalePublishAt = new Date(Date.now() + 60_000).toISOString()
+    db.createPublishBatch({
+      id: 'batch-retry-schedule', dispatchMode: 'platform', status: 'failed', createdAt: now, updatedAt: now,
+      jobs: [
+        { id: 'batch-retry-schedule-001', batchId: 'batch-retry-schedule', assetId: asset.id, title: 'Retry', topics: ['English'], publishAt: stalePublishAt, aigc: true, waitForCovers: false, status: 'failed', error: '排期过近' },
+        { id: 'batch-retry-schedule-002', batchId: 'batch-retry-schedule', assetId: asset.id, title: 'Continue', topics: ['English'], publishAt: new Date(Date.now() + 4 * 3600_000).toISOString(), aigc: true, waitForCovers: false, status: 'interrupted', error: '前一任务需要人工处理，批次已停止' },
+      ],
+    })
+    const { PublisherService } = await import('../src/server/publisher')
+    const publisher = new PublisherService(db, () => undefined)
+    publisher.retry('batch-retry-schedule-001')
+    for (let index = 0; index < 50 && db.publishBatches().find(value => value.id === 'batch-retry-schedule')?.status !== 'completed'; index += 1) await new Promise(resolve => setTimeout(resolve, 20))
+    const persisted = db.publishBatches().find(value => value.id === 'batch-retry-schedule')!
+    expect(persisted.status).toBe('completed')
+    expect(persisted.jobs.map(value => value.status)).toEqual(['scheduled', 'scheduled'])
+    expect(new Date(persisted.jobs[0].publishAt!).getTime()).toBeGreaterThan(Date.now() + 2 * 3600_000)
+  })
+
   it('可取消等待中的抖音发布批次', async () => {
     const file = path.join(downloads, 'cancel-waiting.mp4'); writeFileSync(file, '')
     const asset = await library.registerFile(file)
@@ -122,6 +202,25 @@ describe('工作台持久化与安全边界', () => {
     const reopened = new AppDatabase()
     expect(reopened.asset(asset.id)?.processingState).toBe('processed')
     expect(reopened.publishBatches().find(value => value.id === 'batch-reconcile')?.status).toBe('completed')
+  })
+
+  it('启动时恢复仍有待提交任务的中断批次', async () => {
+    const asset = db.assets()[0], now = new Date().toISOString()
+    const submitAt = new Date(Date.now() + 60_000).toISOString()
+    db.createPublishBatch({
+      id: 'batch-resume-pending',
+      dispatchMode: 'platform',
+      status: 'interrupted',
+      createdAt: now,
+      updatedAt: now,
+      jobs: [
+        { id: 'batch-resume-pending-001', batchId: 'batch-resume-pending', assetId: asset.id, title: 'Done', topics: ['English'], aigc: true, waitForCovers: false, status: 'published' },
+        { id: 'batch-resume-pending-002', batchId: 'batch-resume-pending', assetId: asset.id, title: 'Pending', topics: ['English'], submitAt, aigc: true, waitForCovers: false, status: 'queued' },
+      ],
+    })
+    const { AppDatabase } = await import('../src/server/db')
+    const reopened = new AppDatabase()
+    expect(reopened.publishBatches().find(value => value.id === 'batch-resume-pending')?.status).toBe('queued')
   })
 
   it('分析历史可单个删除或全部清除，但保留运行中任务', () => {

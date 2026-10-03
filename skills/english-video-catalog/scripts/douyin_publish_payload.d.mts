@@ -5,4 +5,5 @@ export interface DouyinPublishPayload {
 }
 
 export function buildPublishDescription(job?: DouyinPublishPayload): string
+export function normalizePublishTopics(title?: string, topics?: unknown[]): string[]
 export function shouldWaitForCovers(job?: DouyinPublishPayload): boolean
