@@ -98,6 +98,7 @@ async function api(request: IncomingMessage, response: ServerResponse, url: URL)
   }
   if (request.method === 'POST' && pathname === '/api/publisher/publish') { const value = await body<{ jobs: Parameters<PublisherService['create']>[0]; dispatchMode: 'platform' | 'local'; idempotencyKey?: string }>(request); return json(response, 202, publisher.create(value.jobs, value.dispatchMode, value.idempotencyKey)) }
   const publishRetry = request.method === 'POST' && pathname.match(/^\/api\/publisher\/jobs\/([^/]+)\/retry$/); if (publishRetry) { publisher.retry(publishRetry[1]); return json(response, 202, null) }
+  const cancelBatch = request.method === 'POST' && pathname.match(/^\/api\/publisher\/batches\/([^/]+)\/cancel$/); if (cancelBatch) { publisher.cancelBatch(cancelBatch[1]); return json(response, 200, null) }
   const deleteBatch = request.method === 'DELETE' && pathname.match(/^\/api\/publisher\/batches\/([^/]+)$/); if (deleteBatch) { await publisher.deleteBatch(deleteBatch[1]); return json(response, 200, null) }
   return json(response, 404, { error: '接口不存在' })
 }

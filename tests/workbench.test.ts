@@ -63,7 +63,7 @@ describe('工作台持久化与安全边界', () => {
 
   it('活动发布批次不能被删除', () => {
     const asset = db.assets()[0], now = new Date().toISOString()
-    db.createPublishBatch({ id: 'batch-active', dispatchMode: 'platform', status: 'queued', createdAt: now, updatedAt: now, jobs: [{ id: 'batch-active-001', batchId: 'batch-active', assetId: asset.id, title: 'Directions', topics: ['English'], aigc: true, status: 'queued' }] })
+    db.createPublishBatch({ id: 'batch-active', dispatchMode: 'platform', status: 'queued', createdAt: now, updatedAt: now, jobs: [{ id: 'batch-active-001', batchId: 'batch-active', assetId: asset.id, title: 'Directions', topics: ['English'], aigc: true, waitForCovers: false, status: 'queued' }] })
     expect(db.deletePublishBatch('batch-active')).toBe(false)
     db.updatePublishJob('batch-active-001', 'published'); db.updatePublishBatch('batch-active', 'completed')
     expect(db.deletePublishBatch('batch-active')).toBe(true)
@@ -82,16 +82,42 @@ describe('工作台持久化与安全边界', () => {
     const publisher = new PublisherService(db, () => { changes += 1 })
     await new Promise(resolve => setTimeout(resolve, 20))
     const batch = publisher.create([{ assetId: asset.id, title: 'Directions', topics: ['English'] }], 'platform')
+    expect(batch.jobs[0].waitForCovers).toBe(false)
     for (let index = 0; index < 50 && db.publishBatches().find(value => value.id === batch.id)?.status !== 'completed'; index += 1) await new Promise(resolve => setTimeout(resolve, 20))
     expect(db.publishBatches().find(value => value.id === batch.id)?.status).toBe('completed')
     expect(db.asset(asset.id)?.processingState).toBe('processed')
     expect(changes).toBeGreaterThan(1)
+
+    const coverBatch = publisher.create([{ assetId: asset.id, title: 'Directions', topics: ['English'], waitForCovers: true }], 'platform')
+    expect(coverBatch.jobs[0].waitForCovers).toBe(true)
+    for (let index = 0; index < 50 && db.publishBatches().find(value => value.id === coverBatch.id)?.status !== 'completed'; index += 1) await new Promise(resolve => setTimeout(resolve, 20))
+  })
+
+  it('可取消等待中的抖音发布批次', async () => {
+    const file = path.join(downloads, 'cancel-waiting.mp4'); writeFileSync(file, '')
+    const asset = await library.registerFile(file)
+    process.env.SVD_PUBLISH_COOLDOWN_MS = '0'
+    const { PublisherService } = await import('../src/server/publisher')
+    const publisher = new PublisherService(db, () => undefined)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const firstAt = new Date(Date.now() + 3600_000).toISOString()
+    const secondAt = new Date(Date.now() + 7200_000).toISOString()
+    const batch = publisher.create([
+      { assetId: asset.id, title: 'First Waiting', topics: ['English'], publishAt: firstAt },
+      { assetId: asset.id, title: 'Second Waiting', topics: ['English'], publishAt: secondAt },
+    ], 'local')
+    expect(['queued', 'waiting_local']).toContain(db.publishBatches().find(value => value.id === batch.id)?.status)
+    publisher.cancelBatch(batch.id)
+    const cancelled = db.publishBatches().find(value => value.id === batch.id)!
+    expect(cancelled.status).toBe('cancelled')
+    expect(cancelled.jobs.every(job => job.status === 'cancelled')).toBe(true)
+    expect(cancelled.jobs.every(job => job.error?.includes('取消'))).toBe(true)
   })
 
   it('启动时对账已发布历史与媒体处理状态', async () => {
     const asset = db.assets()[0], now = new Date().toISOString()
     db.setAssetState(asset.id, 'unprocessed')
-    db.createPublishBatch({ id: 'batch-reconcile', dispatchMode: 'platform', status: 'interrupted', createdAt: now, updatedAt: now, jobs: [{ id: 'batch-reconcile-001', batchId: 'batch-reconcile', assetId: asset.id, title: 'Directions', topics: ['English'], aigc: true, status: 'published' }] })
+    db.createPublishBatch({ id: 'batch-reconcile', dispatchMode: 'platform', status: 'interrupted', createdAt: now, updatedAt: now, jobs: [{ id: 'batch-reconcile-001', batchId: 'batch-reconcile', assetId: asset.id, title: 'Directions', topics: ['English'], aigc: true, waitForCovers: false, status: 'published' }] })
     const { AppDatabase } = await import('../src/server/db')
     const reopened = new AppDatabase()
     expect(reopened.asset(asset.id)?.processingState).toBe('processed')

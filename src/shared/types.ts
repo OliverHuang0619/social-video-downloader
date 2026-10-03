@@ -5,7 +5,7 @@ export type CookieSource = 'none' | 'file'
 export type MediaFormatKind = 'video-audio' | 'video-only' | 'audio-only'
 export type ProcessingState = 'unprocessed' | 'processed'
 export type AnalysisJobStatus = 'queued' | 'preparing' | 'analyzing' | 'completed' | 'failed' | 'cancelled'
-export type PublishJobStatus = 'queued' | 'waiting_local' | 'launching' | 'uploading' | 'scheduling' | 'waiting_covers' | 'submitting' | 'published' | 'scheduled' | 'failed' | 'needs_login' | 'needs_attention' | 'interrupted'
+export type PublishJobStatus = 'queued' | 'waiting_local' | 'launching' | 'uploading' | 'scheduling' | 'waiting_covers' | 'submitting' | 'published' | 'scheduled' | 'failed' | 'needs_login' | 'needs_attention' | 'interrupted' | 'cancelled'
 
 export interface MediaFormat {
   id: string
@@ -121,6 +121,7 @@ export interface PublishJob {
   publishAt?: string
   executeAt?: string
   aigc: boolean
+  waitForCovers: boolean
   status: PublishJobStatus
   error?: string
   screenshot?: string
@@ -129,7 +130,7 @@ export interface PublishJob {
 export interface PublishBatch {
   id: string
   dispatchMode: 'platform' | 'local'
-  status: 'queued' | 'waiting_local' | 'running' | 'completed' | 'partial' | 'failed' | 'needs_attention' | 'interrupted'
+  status: 'queued' | 'waiting_local' | 'running' | 'completed' | 'partial' | 'failed' | 'needs_attention' | 'interrupted' | 'cancelled'
   createdAt: string
   updatedAt: string
   jobs: PublishJob[]

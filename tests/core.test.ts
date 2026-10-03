@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildFormatArgs, detectPlatform, filterMediaAssets, formatsFromYtDlp, normalizeUrls, sanitizeFilename } from '../src/shared/core'
+import { buildFormatArgs, detectPlatform, filterMediaAssets, formatsFromYtDlp, mediaAssetDirectory, normalizeUrls, sanitizeFilename } from '../src/shared/core'
 import { buildOutputTemplate, DownloadQueue, parseDownloadOutput } from '../src/main/queue'
 import { classifyError, mediaFromGalleryDlLine, youtubeAttemptSources, youtubeCookieArgs } from '../src/main/media'
 import { CodexService, cleanCodexOutput, parseCodexLoginOutput, parseCodexRateLimits, resolveCodexAnalysisConfig } from '../src/server/codex'
@@ -56,6 +56,18 @@ describe('媒体库筛选', () => {
     expect(filterMediaAssets(assets, 'awaiting-analysis', 'all', '')).toEqual([unprocessedAwaiting, processedAwaiting])
     expect(filterMediaAssets(assets, 'processed', 'all', '')).toEqual([processedAwaiting, processedAnalyzed])
     expect(filterMediaAssets(assets, 'unprocessed', 'all', '')).toEqual([unprocessedAnalyzed])
+  })
+
+  it('按媒体文件父目录筛选，并继续组合其他筛选条件', () => {
+    const course = { ...asset('course', 'unprocessed', true), file: '/downloads/course-a/lesson.mp4' }
+    const nested = { ...asset('nested', 'processed', true), file: '/downloads/course-a/unit-2/dialogue.mp4' }
+    const other = { ...asset('other', 'unprocessed', true), file: '/downloads/course-b/story.mp4' }
+    const assets = [course, nested, other]
+
+    expect(mediaAssetDirectory(course.file)).toBe('/downloads/course-a')
+    expect(mediaAssetDirectory('C:\\downloads\\course-a\\lesson.mp4')).toBe('C:/downloads/course-a')
+    expect(filterMediaAssets(assets, 'all', 'all', '', '/downloads/course-a')).toEqual([course])
+    expect(filterMediaAssets(assets, 'processed', 'all', '', '/downloads/course-a/unit-2')).toEqual([nested])
   })
 })
 

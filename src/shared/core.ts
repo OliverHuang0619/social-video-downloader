@@ -21,11 +21,18 @@ export function normalizeUrls(input: string | string[]): string[] {
 
 export type LibraryStateFilter = ProcessingState | 'awaiting-analysis' | 'all'
 
-export function filterMediaAssets(assets: MediaAsset[], state: LibraryStateFilter, category: string, query: string): MediaAsset[] {
+export function mediaAssetDirectory(file: string): string {
+  const normalized = file.replace(/\\/g, '/').replace(/\/+$/, '')
+  const separator = normalized.lastIndexOf('/')
+  return separator > 0 ? normalized.slice(0, separator) : '.'
+}
+
+export function filterMediaAssets(assets: MediaAsset[], state: LibraryStateFilter, category: string, query: string, directory = 'all'): MediaAsset[] {
   const needle = query.toLocaleLowerCase()
   return assets.filter(asset =>
     (state === 'all' || (state === 'awaiting-analysis' ? !asset.analysis : asset.processingState === state && (state !== 'unprocessed' || Boolean(asset.analysis)))) &&
     (category === 'all' || asset.analysis?.category === category) &&
+    (directory === 'all' || mediaAssetDirectory(asset.file) === directory) &&
     (!needle || [asset.filename, asset.analysis?.title, asset.analysis?.englishTitle, asset.analysis?.summary, ...(asset.analysis?.keyTopics || [])].some(value => value?.toLocaleLowerCase().includes(needle)))
   )
 }

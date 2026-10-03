@@ -34,13 +34,16 @@ export class AppDatabase {
       CREATE TABLE IF NOT EXISTS publish_jobs (
         id TEXT PRIMARY KEY, batch_id TEXT NOT NULL REFERENCES publish_batches(id) ON DELETE CASCADE,
         asset_id TEXT NOT NULL REFERENCES media_assets(id), title TEXT NOT NULL, topics TEXT NOT NULL,
-        publish_at TEXT, execute_at TEXT, aigc INTEGER NOT NULL, status TEXT NOT NULL, error TEXT, screenshot TEXT
+        publish_at TEXT, execute_at TEXT, aigc INTEGER NOT NULL, wait_for_covers INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL, error TEXT, screenshot TEXT
       );
       CREATE TABLE IF NOT EXISTS download_jobs (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, event TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL);
     `)
     const analysisColumns = new Set((this.sqlite.prepare('PRAGMA table_info(analysis_jobs)').all() as { name: string }[]).map(column => column.name))
     if (!analysisColumns.has('detail_json')) this.sqlite.exec("ALTER TABLE analysis_jobs ADD COLUMN detail_json TEXT NOT NULL DEFAULT '{}'")
+    const publishColumns = new Set((this.sqlite.prepare('PRAGMA table_info(publish_jobs)').all() as { name: string }[]).map(column => column.name))
+    if (!publishColumns.has('wait_for_covers')) this.sqlite.exec('ALTER TABLE publish_jobs ADD COLUMN wait_for_covers INTEGER NOT NULL DEFAULT 0')
     this.sqlite.exec("UPDATE analysis_jobs SET status='failed', error='服务重启，原分析任务已中断', updated_at=datetime('now') WHERE status IN ('queued','preparing','analyzing')")
     this.sqlite.exec("UPDATE publish_jobs SET status='interrupted', error='服务曾在发布过程中重启，请先到抖音作品管理确认' WHERE status IN ('launching','uploading','scheduling','waiting_covers','submitting')")
     this.sqlite.exec("UPDATE publish_batches SET status='interrupted', updated_at=datetime('now') WHERE status='running'")
@@ -114,8 +117,8 @@ export class AppDatabase {
     this.sqlite.exec('BEGIN')
     try {
       this.sqlite.prepare('INSERT INTO publish_batches VALUES(?,?,?,?,?)').run(batch.id, batch.dispatchMode, batch.status, batch.createdAt, batch.updatedAt)
-      const insert = this.sqlite.prepare('INSERT INTO publish_jobs VALUES(?,?,?,?,?,?,?,?,?,?,?)')
-      for (const job of batch.jobs) insert.run(job.id, batch.id, job.assetId, job.title, JSON.stringify(job.topics), job.publishAt || null, job.executeAt || null, job.aigc ? 1 : 0, job.status, job.error || null, job.screenshot || null)
+      const insert = this.sqlite.prepare('INSERT INTO publish_jobs (id,batch_id,asset_id,title,topics,publish_at,execute_at,aigc,wait_for_covers,status,error,screenshot) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)')
+      for (const job of batch.jobs) insert.run(job.id, batch.id, job.assetId, job.title, JSON.stringify(job.topics), job.publishAt || null, job.executeAt || null, job.aigc ? 1 : 0, job.waitForCovers ? 1 : 0, job.status, job.error || null, job.screenshot || null)
       this.sqlite.exec('COMMIT')
     } catch (error) { this.sqlite.exec('ROLLBACK'); throw error }
   }
@@ -124,7 +127,7 @@ export class AppDatabase {
   publishBatches(): PublishBatch[] {
     const batches = this.sqlite.prepare('SELECT * FROM publish_batches ORDER BY created_at DESC').all() as Record<string, unknown>[]
     const jobsFor = this.sqlite.prepare('SELECT * FROM publish_jobs WHERE batch_id=? ORDER BY id')
-    return batches.map(row => ({ id: String(row.id), dispatchMode: row.dispatch_mode as PublishBatch['dispatchMode'], status: row.status as PublishBatch['status'], createdAt: String(row.created_at), updatedAt: String(row.updated_at), jobs: (jobsFor.all(String(row.id)) as Record<string, unknown>[]).map(job => ({ id: String(job.id), batchId: String(job.batch_id), assetId: String(job.asset_id), title: String(job.title), topics: JSON.parse(String(job.topics)), publishAt: job.publish_at ? String(job.publish_at) : undefined, executeAt: job.execute_at ? String(job.execute_at) : undefined, aigc: Boolean(job.aigc), status: job.status as PublishJob['status'], error: job.error ? String(job.error) : undefined, screenshot: job.screenshot ? String(job.screenshot) : undefined })) }))
+    return batches.map(row => ({ id: String(row.id), dispatchMode: row.dispatch_mode as PublishBatch['dispatchMode'], status: row.status as PublishBatch['status'], createdAt: String(row.created_at), updatedAt: String(row.updated_at), jobs: (jobsFor.all(String(row.id)) as Record<string, unknown>[]).map(job => ({ id: String(job.id), batchId: String(job.batch_id), assetId: String(job.asset_id), title: String(job.title), topics: JSON.parse(String(job.topics)), publishAt: job.publish_at ? String(job.publish_at) : undefined, executeAt: job.execute_at ? String(job.execute_at) : undefined, aigc: Boolean(job.aigc), waitForCovers: Boolean(job.wait_for_covers), status: job.status as PublishJob['status'], error: job.error ? String(job.error) : undefined, screenshot: job.screenshot ? String(job.screenshot) : undefined })) }))
   }
   deletePublishBatch(id: string) { return this.sqlite.prepare("DELETE FROM publish_batches WHERE id=? AND status NOT IN ('queued','waiting_local','running')").run(id).changes > 0 }
 }
