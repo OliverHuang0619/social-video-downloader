@@ -2,6 +2,16 @@
   width: min(1800px, calc(100% - 36px));
 }
 
+.library-content .actionbar {
+  position: sticky;
+  top: 88px;
+  z-index: 8;
+  border-color: #2a3b55;
+  background: linear-gradient(145deg, rgb(16 23 36 / 96%), rgb(12 18 29 / 96%));
+  box-shadow: 0 14px 36px #0009;
+  backdrop-filter: blur(16px);
+}
+
 .library-content .asset-grid {
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
@@ -124,6 +134,16 @@
 @media (max-width: 760px) {
   .library-content {
     width: calc(100% - 24px);
+  }
+
+  .library-content .actionbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .library-content .actionbar .row {
+    width: 100%;
+    flex-wrap: wrap;
   }
 
   .library-content .asset-grid {
