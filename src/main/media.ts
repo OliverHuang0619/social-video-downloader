@@ -8,6 +8,10 @@ function cookieArgs(source: CookieSource) {
   if (source === 'none') return []
   return ['--cookies', process.env.SVD_COOKIES_FILE || '/config/cookies.txt']
 }
+export function youtubeCookieArgs(source: CookieSource) {
+  const runtimeArgs = ['--js-runtimes', 'node', '--extractor-args', 'youtube:player_client=default,web_embedded']
+  return source === 'none' ? runtimeArgs : [...cookieArgs(source), ...runtimeArgs]
+}
 function collect(command: string, args: string[]) {
   return new Promise<string>((resolve, reject) => {
     const child = spawn(command, args, { windowsHide: true }); let out = '', error = '', settled = false
@@ -25,12 +29,35 @@ function collect(command: string, args: string[]) {
     child.on('error', value => finish(() => reject(value)))
   })
 }
-function classifyError(error: string) {
+export function classifyError(error: string) {
   const value = error.trim()
+  if (/page needs to be reloaded|reload (?:the )?page|try again later|temporary error/i.test(value)) return 'YouTube 页面暂时异常，自动重试后仍无法解析。请稍后重试，或更新服务器 Cookie。'
   if (/cookies|login|sign in|authentication/i.test(value)) return '需要有效的登录 Cookie，请挂载 cookies.txt 并在设置中启用。'
   if (/429|rate.?limit|too many/i.test(value)) return '平台请求过于频繁，请稍后重试或启用服务器 Cookie。'
   if (/private|not available|unavailable/i.test(value)) return '该内容不可用、为私密内容或受到地区限制。'
   return value.split(/\r?\n/).filter(Boolean).slice(-3).join('\n') || '解析失败'
+}
+
+export function youtubeAttemptSources(source: CookieSource): CookieSource[] {
+  return source === 'file' ? ['file', 'none'] : ['none', 'none']
+}
+
+async function collectYoutubeMetadata(command: string, url: string, source: CookieSource) {
+  const attempts = youtubeAttemptSources(source)
+  let lastError: Error | undefined
+  for (let index = 0; index < attempts.length; index += 1) {
+    try {
+      return await collect(command, ['--dump-single-json', '--no-warnings', '--no-playlist', ...youtubeCookieArgs(attempts[index]), url])
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error))
+      const transient = /页面暂时异常|page needs to be reloaded|reload (?:the )?page|try again later|temporary error/i.test(lastError.message)
+      // With a cookie file, retry public extraction without it because stale or
+      // region-bound YouTube cookies can make an otherwise public video fail.
+      if (index + 1 >= attempts.length || (source === 'none' && !transient)) throw lastError
+      await new Promise(resolve => setTimeout(resolve, 500))
+    }
+  }
+  throw lastError || new Error('解析失败')
 }
 
 export function mediaFromGalleryDlLine(line: string, username: string): MediaItem | undefined {
@@ -59,7 +86,9 @@ export class MediaService {
     await Promise.all(Array.from({ length: Math.min(3, urls.length) }, async () => {
       while (cursor < urls.length) {
         const index = cursor++; const url = urls[index]
-        const output = await collect(ytdlp, ['--dump-single-json', '--no-warnings', '--no-playlist', ...cookieArgs(request.cookieSource), url])
+        const output = detectPlatform(url) === 'youtube'
+          ? await collectYoutubeMetadata(ytdlp, url, request.cookieSource)
+          : await collect(ytdlp, ['--dump-single-json', '--no-warnings', '--no-playlist', ...cookieArgs(request.cookieSource), url])
         results[index] = mediaFromYtDlp(JSON.parse(output), url)
       }
     }))
@@ -83,7 +112,7 @@ export class MediaService {
   private async scanYtDlp(url: string, source: CookieSource, scanId: string, emit: (e: ScanEvent) => void, onItem: (i: MediaItem) => void) {
     const tool = await this.tools.resolve('yt-dlp'); if (!tool) throw new Error('未找到 yt-dlp，请先安装运行工具。')
     emit({ type: 'status', scanId, message: '正在读取频道或播放列表…' })
-    await this.stream(tool, ['--flat-playlist', '--dump-json', '--yes-playlist', '--no-warnings', ...cookieArgs(source), url], line => {
+    await this.stream(tool, ['--flat-playlist', '--dump-json', '--yes-playlist', '--no-warnings', ...youtubeCookieArgs(source), url], line => {
       const raw = JSON.parse(line); onItem(mediaFromYtDlp(raw, raw.url || url, String(raw.playlist_title || raw.channel || '合集')))
     })
   }

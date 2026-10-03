@@ -72,7 +72,11 @@ export class DownloadQueue {
     // Keep a second, literal prefix so the stream remains machine-readable.
     const args = ['--newline', '--no-overwrites', '--continue', '--retries', '3', '--fragment-retries', '3', '-o', template, '--progress-template', 'download:svd:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s', '--print', 'after_move:svd-file:%(filepath)s', ...buildFormatArgs(job.options, job.item)]
     if (ffmpeg) args.push('--ffmpeg-location', ffmpeg)
-    if (job.options.cookieSource !== 'none') args.push('--cookies', process.env.SVD_COOKIES_FILE || '/config/cookies.txt')
+    if (job.options.cookieSource !== 'none') {
+      args.push('--cookies', process.env.SVD_COOKIES_FILE || '/config/cookies.txt')
+      if (job.item.platform === 'youtube') args.push('--js-runtimes', 'node', '--extractor-args', 'youtube:player_client=default,web_embedded')
+    }
+    else if (job.item.platform === 'youtube') args.push('--js-runtimes', 'node', '--extractor-args', 'youtube:player_client=default,web_embedded')
     if (job.item.platform === 'instagram') args.push('--referer', 'https://www.instagram.com/')
     args.push(job.item.sourceUrl)
     const child = spawn(ytdlp, args, { windowsHide: true }); this.active.set(job.id, child); this.emit()

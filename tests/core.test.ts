@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { buildFormatArgs, detectPlatform, formatsFromYtDlp, normalizeUrls, sanitizeFilename } from '../src/shared/core'
 import { buildOutputTemplate, DownloadQueue, parseDownloadOutput } from '../src/main/queue'
-import { mediaFromGalleryDlLine } from '../src/main/media'
+import { classifyError, mediaFromGalleryDlLine, youtubeAttemptSources, youtubeCookieArgs } from '../src/main/media'
 import { CodexService, cleanCodexOutput, parseCodexLoginOutput, parseCodexRateLimits, resolveCodexAnalysisConfig } from '../src/server/codex'
 import { executeAnalysisProcess, parseCodexProgressLine } from '../src/server/analysis'
+import { hasPlatformLogin, parseManualCookies, serializeNetscapeCookies } from '../src/server/youtube-cookies'
 import type { DownloadOptions, MediaItem } from '../src/shared/types'
 
 const options: DownloadOptions = { mode: 'video', quality: '1080', container: 'mp4', audioFormat: 'mp3', audioBitrate: '192', outputRoot: '/tmp', cookieSource: 'none', quickTimeCompatible: true }
@@ -104,5 +105,39 @@ describe('Instagram 扫描', () => {
   })
   it('把 gallery-dl 内嵌错误显示给用户', () => {
     expect(() => mediaFromGalleryDlLine(JSON.stringify([-1, { error: 'AuthError', message: 'login required' }]), 'owner')).toThrow('login required')
+  })
+})
+
+describe('YouTube 解析容错', () => {
+  it('使用 Cookie 失败后回退到公开解析', () => {
+    expect(youtubeAttemptSources('file')).toEqual(['file', 'none'])
+    expect(youtubeAttemptSources('none')).toEqual(['none', 'none'])
+    expect(youtubeCookieArgs('file')).toContain('youtube:player_client=default,web_embedded')
+    expect(youtubeCookieArgs('file')).toContain('node')
+  })
+  it('把 YouTube 临时刷新页和不可用视频转换为明确提示', () => {
+    expect(classifyError('ERROR: [youtube] abc: The page needs to be reloaded.')).toContain('页面暂时异常')
+    expect(classifyError('ERROR: [youtube] abc: This video is unavailable')).toBe('该内容不可用、为私密内容或受到地区限制。')
+  })
+})
+
+describe('平台 Cookie 管理', () => {
+  it('识别 YouTube 和 Instagram 登录会话', () => {
+    expect(hasPlatformLogin('youtube', [{ name: 'PREF' }])).toBe(false)
+    expect(hasPlatformLogin('youtube', [{ name: '__Secure-3PSID' }])).toBe(true)
+    expect(hasPlatformLogin('instagram', [{ name: 'sessionid' }])).toBe(true)
+  })
+  it('生成 yt-dlp 可读取的 Netscape Cookie 文件', () => {
+    const output = serializeNetscapeCookies([
+      { name: 'SID', value: 'secret', domain: '.youtube.com', path: '/', expires: 1800000000, httpOnly: true, secure: true },
+      { name: 'ignored', value: 'other', domain: '.example.com', path: '/', expires: -1, httpOnly: false, secure: false },
+    ])
+    expect(output).toContain('#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t1800000000\tSID\tsecret')
+    expect(output).toContain('.example.com')
+  })
+  it('支持手动粘贴 Cookie 请求头和浏览器 JSON', () => {
+    expect(parseManualCookies('instagram', 'Cookie: sessionid=abc; csrftoken=def')).toHaveLength(2)
+    expect(parseManualCookies('youtube', JSON.stringify([{ domain: '.youtube.com', name: 'SID', value: 'abc' }]))[0]).toMatchObject({ name: 'SID', domain: '.youtube.com' })
+    expect(() => parseManualCookies('instagram', JSON.stringify([{ domain: '.youtube.com', name: 'SID', value: 'abc' }]))).toThrow('Instagram')
   })
 })

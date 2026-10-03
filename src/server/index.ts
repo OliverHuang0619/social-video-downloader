@@ -8,13 +8,14 @@ import { ConfigStore } from '../main/config'
 import { ToolManager } from '../main/tools'
 import { MediaService } from '../main/media'
 import { DownloadQueue } from '../main/queue'
-import type { AnalyzeRequest, ScanEvent, ScanRequest, StartRequest, ToolUpdateEvent } from '../shared/types'
+import type { AnalyzeRequest, CookiePlatform, ScanEvent, ScanRequest, StartRequest, ToolUpdateEvent } from '../shared/types'
 import { AppDatabase } from './db'
 import { AuthService } from './auth'
 import { LibraryService } from './library'
 import { CodexService } from './codex'
 import { AnalysisService } from './analysis'
 import { PublisherService } from './publisher'
+import { YoutubeCookieService } from './youtube-cookies'
 import { migrateLegacy } from './migration'
 
 type ServerEvent =
@@ -29,6 +30,7 @@ const changed = (type: 'library' | 'analysis' | 'publisher' | 'codex') => publis
 const config = new ConfigStore(), tools = new ToolManager(), media = new MediaService(tools), queue = new DownloadQueue(tools)
 const db = new AppDatabase(), auth = new AuthService(db), library = new LibraryService(db), codex = new CodexService(() => changed('codex'))
 const analysis = new AnalysisService(db, codex, () => changed('analysis')), publisher = new PublisherService(db, () => changed('publisher'))
+const youtubeCookies = new YoutubeCookieService()
 const port = Number(process.env.PORT || 3000), host = process.env.HOST || '0.0.0.0'
 const clientDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../client')
 const browserProxy = httpProxy.createProxyServer({ target: process.env.SVD_BROWSER_VNC || 'http://browser:6080', ws: true })
@@ -50,6 +52,10 @@ async function api(request: IncomingMessage, response: ServerResponse, url: URL)
   if (request.method === 'GET' && pathname === '/api/events') { response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' }); response.write(`data: ${JSON.stringify({ type: 'downloads', jobs: queue.snapshot() })}\n\n`); clients.add(response); const heartbeat = setInterval(() => response.write(': keepalive\n\n'), 15_000); request.on('close', () => { clearInterval(heartbeat); clients.delete(response) }); return }
   if (request.method === 'GET' && pathname === '/api/tools') return json(response, 200, await tools.status())
   if (request.method === 'POST' && pathname === '/api/tools/update') return json(response, 200, await tools.update(event => publish({ type: 'tools', event })))
+  if (request.method === 'GET' && pathname === '/api/cookies/status') return json(response, 200, await youtubeCookies.status())
+  if (request.method === 'POST' && pathname === '/api/cookies/update') { const value = await body<{ platform: CookiePlatform }>(request); return json(response, 202, await youtubeCookies.update(value.platform)) }
+  if (request.method === 'POST' && pathname === '/api/cookies/manual') { const value = await body<{ platform: CookiePlatform; contents: string }>(request); return json(response, 200, await youtubeCookies.manual(value.platform, String(value.contents || ''))) }
+  if (request.method === 'GET' && pathname === '/api/cookies/view') return json(response, 200, await youtubeCookies.view(url.searchParams.get('reveal') === 'true'))
   if (request.method === 'POST' && pathname === '/api/source/analyze') return json(response, 200, await media.analyze(await body<AnalyzeRequest>(request)))
   if (request.method === 'POST' && pathname === '/api/creator/scan') return json(response, 200, await media.scan(await body<ScanRequest>(request), event => publish({ type: 'creator', event })))
   if (request.method === 'POST' && pathname === '/api/creator/stop') { media.stop(); return json(response, 200, null) }

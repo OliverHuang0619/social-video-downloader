@@ -40,6 +40,8 @@
 ./deploy.sh redeploy-local
 ```
 
+下载页提供 YouTube 与 Instagram Cookie 管理。可分别在工作台浏览器中打开平台并等待用户完成登录，再自动合并导出到 `config/cookies.txt`；也可手动粘贴 Netscape cookies.txt、浏览器扩展 JSON 或 `Cookie:` 请求头。查看功能默认隐藏 Cookie 值，只有用户明确点击后才显示完整文件。文件以仅当前用户可读写的权限保存，Cookie 内容不会写入服务日志。
+
 如果没有自动找到浏览器，可设置 `LOCAL_BROWSER_BIN='/浏览器可执行文件路径'`。可以使用 `./local-browser.sh start|stop|status` 单独管理本地浏览器。服务器、NAS 或无人值守部署仍应使用默认的 Browser 容器模式。
 
 查看状态与日志：

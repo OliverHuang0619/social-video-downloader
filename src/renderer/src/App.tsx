@@ -1,5 +1,5 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import type { AnalysisJob, BrowserStatus, CodexStatus, DownloadJob, DownloadOptions, MediaAsset, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, ToolStatus } from '../../shared/types'
+import type { AnalysisJob, BrowserStatus, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, DownloadJob, DownloadOptions, MediaAsset, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, ToolStatus } from '../../shared/types'
 import { api, onEvent, type WorkbenchEvent } from './api'
 import './styles.css'
 import './task-tabs.css'
@@ -30,6 +30,51 @@ const MediaResult = memo(function MediaResult({ item, toggle, format }: { item: 
   return <article className={`download-item ${item.selected ? 'selected' : ''}`}><input type="checkbox" checked={item.selected} onChange={() => toggle(item.id)} />{item.thumbnail ? <img src={item.thumbnail} alt="" /> : <div className="placeholder">▶</div>}<div><strong>{item.title}</strong><small>{item.uploader || '未知作者'} · {formatDuration(item.duration)}</small>{item.formats?.length ? <select value={item.selectedFormatId} onChange={event => format(item.id, event.target.value)}>{(['video-audio', 'video-only', 'audio-only'] as MediaFormatKind[]).map(kind => { const list = item.formats!.filter(value => value.kind === kind); return list.length ? <optgroup key={kind} label={formatGroups[kind]}>{list.map(value => <option key={value.id} value={value.id}>{formatLabel(value)}</option>)}</optgroup> : null })}</select> : null}</div></article>
 })
 
+const cookiePlatformNames: Record<CookiePlatform, string> = { youtube: 'YouTube', instagram: 'Instagram' }
+
+function CookieManager({ onUseFile }: { onUseFile: () => void }) {
+  const [status, setStatus] = useState<CookieManagerStatus | null>(null)
+  const [dialog, setDialog] = useState<'manual' | 'view'>()
+  const [platform, setPlatform] = useState<CookiePlatform>('youtube')
+  const [contents, setContents] = useState('')
+  const [view, setView] = useState<CookieFileView | null>(null)
+  const [message, setMessage] = useState('')
+  const loadStatus = useCallback(() => { void api.cookies.status().then(setStatus).catch(error => setMessage(errorText(error))) }, [])
+  useEffect(loadStatus, [loadStatus])
+  useEffect(() => {
+    if (!status?.runningPlatform) return
+    const timer = window.setInterval(loadStatus, 1500)
+    return () => window.clearInterval(timer)
+  }, [loadStatus, status?.runningPlatform])
+  const update = async (target: CookiePlatform) => {
+    setMessage(''); onUseFile()
+    try { setStatus(await api.cookies.update(target)) } catch (error) { setMessage(errorText(error)) }
+  }
+  const submitManual = async () => {
+    setMessage('')
+    try { setStatus(await api.cookies.manual(platform, contents)); onUseFile(); setContents(''); setDialog(undefined) } catch (error) { setMessage(errorText(error)) }
+  }
+  const openView = async (reveal = false) => {
+    setMessage('')
+    try { setView(await api.cookies.view(reveal)); setDialog('view') } catch (error) { setMessage(errorText(error)) }
+  }
+  return <>
+    <div className="cookie-controls">
+      <button type="button" disabled={Boolean(status?.runningPlatform)} onClick={() => void update('youtube')}>更新 YouTube</button>
+      <button type="button" disabled={Boolean(status?.runningPlatform)} onClick={() => void update('instagram')}>更新 Instagram</button>
+      <button type="button" disabled={Boolean(status?.runningPlatform)} onClick={() => { setMessage(''); setDialog('manual') }}>手动更新</button>
+      <button type="button" onClick={() => void openView()}>查看 Cookie</button>
+    </div>
+    {status ? <div className="cookie-platform-status">{(['youtube', 'instagram'] as CookiePlatform[]).map(value => {
+      const item = status.platforms[value]
+      return <p className={item.status === 'error' ? 'error' : 'notice'} key={value}><strong>{cookiePlatformNames[value]}</strong>：{item.message}{item.updatedAt ? ` · ${new Date(item.updatedAt).toLocaleString()}` : ''}</p>
+    })}</div> : null}
+    {message ? <p className="error cookie-status">{message}</p> : null}
+    {dialog === 'manual' ? <div className="modal-bg" role="dialog" aria-modal="true" aria-label="手动更新 Cookie" onMouseDown={() => setDialog(undefined)}><div className="modal cookie-modal" onMouseDown={event => event.stopPropagation()}><h2>手动更新 Cookie</h2><label>平台<select value={platform} onChange={event => setPlatform(event.target.value as CookiePlatform)}><option value="youtube">YouTube</option><option value="instagram">Instagram</option></select></label><label>Cookie 内容<textarea rows={12} value={contents} onChange={event => setContents(event.target.value)} placeholder="可粘贴 Netscape cookies.txt、浏览器扩展导出的 JSON，或 Cookie: name=value; name2=value2" /></label><p className="muted">只会替换所选平台的 Cookie，另一个平台和其他域名的数据会保留。</p>{message ? <p className="error">{message}</p> : null}<div className="row end"><button onClick={() => setDialog(undefined)}>取消</button><button className="primary" disabled={!contents.trim()} onClick={() => void submitManual()}>保存 Cookie</button></div></div></div> : null}
+    {dialog === 'view' && view ? <div className="modal-bg" role="dialog" aria-modal="true" aria-label="查看 Cookie" onMouseDown={() => setDialog(undefined)}><div className="modal cookie-modal cookie-view" onMouseDown={event => event.stopPropagation()}><h2>查看 Cookie</h2><p className="warning">Cookie 可用于登录账号，请勿发送给其他人。默认只显示名称；仅在确有需要时显示完整值。</p>{view.raw ? <textarea rows={16} readOnly value={view.raw} /> : <div className="cookie-entry-list">{view.entries.length ? view.entries.map((entry, index) => <div className="cookie-entry" key={`${entry.domain}-${entry.path}-${entry.name}-${index}`}><strong>{entry.name}</strong><span>{entry.platform} · {entry.domain}</span><small>{entry.expires ? `到期：${new Date(entry.expires * 1000).toLocaleString()}` : '会话 Cookie'}{entry.httpOnly ? ' · HttpOnly' : ''}{entry.secure ? ' · Secure' : ''}</small></div>) : <p className="muted">当前没有 Cookie。</p>}</div>}<div className="row between"><button onClick={() => void openView(!view.raw)}>{view.raw ? '隐藏完整值' : '显示完整值'}</button><div className="row"><button disabled={!view.raw} onClick={() => view.raw && void navigator.clipboard.writeText(view.raw)}>复制完整文件</button><button onClick={() => setDialog(undefined)}>关闭</button></div></div></div></div> : null}
+  </>
+}
+
 function DownloadPage({ jobs, setJobs }: { jobs: DownloadJob[]; setJobs: (jobs: DownloadJob[]) => void }) {
   const [mode, setMode] = useState<'links' | 'creator'>('links'), [input, setInput] = useState(''), [items, setItems] = useState<MediaItem[]>([]), [options, setOptions] = useState(initialOptions), [message, setMessage] = useState(''), [busy, setBusy] = useState(false)
   const deferred = useDeferredValue(items), selected = useMemo(() => items.filter(item => item.selected), [items])
@@ -40,7 +85,25 @@ function DownloadPage({ jobs, setJobs }: { jobs: DownloadJob[]; setJobs: (jobs: 
   const toggle = useCallback((id: string) => setItems(current => current.map(item => item.id === id ? { ...item, selected: !item.selected } : item)), [])
   const format = useCallback((id: string, value: string) => setItems(current => current.map(item => item.id === id ? { ...item, selectedFormatId: value } : item)), [])
   const start = async () => { try { setJobs(await api.downloads.start({ items: selected, options })); setMessage('下载任务已创建，完成后将自动进入媒体库') } catch (error) { setMessage(errorText(error)) } }
-  return <div className="page-stack"><section className="panel source"><div className="segmented"><button className={mode === 'links' ? 'active' : ''} onClick={() => setMode('links')}>链接下载</button><button className={mode === 'creator' ? 'active' : ''} onClick={() => setMode('creator')}>博主主页</button></div><textarea rows={4} value={input} onChange={event => setInput(event.target.value)} placeholder={mode === 'links' ? '每行粘贴一个视频链接…' : '粘贴 YouTube 频道或 Instagram 主页…'} /><div className="row between"><label>登录 Cookie <select value={options.cookieSource} onChange={event => setOptions(value => ({ ...value, cookieSource: event.target.value as 'none' | 'file' }))}><option value="none">不使用</option><option value="file">服务器 cookies.txt</option></select></label><button className="primary" disabled={busy || !input.trim()} onClick={() => void (mode === 'links' ? analyze() : scan())}>{busy ? '处理中…' : mode === 'links' ? '解析链接' : '扫描主页'}</button></div>{message ? <p className="notice">{message}</p> : null}</section><section className="split"><div className="panel"><div className="panel-head"><div><h2>待下载视频</h2><p>{selected.length} / {items.length} 项已选择</p></div></div><div className="result-list">{deferred.length ? deferred.map(item => <MediaResult key={`${item.platform}-${item.id}`} item={item} toggle={toggle} format={format} />) : <div className="empty">解析结果会显示在这里</div>}</div></div><aside className="panel settings-card"><h2>下载设置</h2><label>视频质量<select value={options.quality} onChange={event => setOptions(value => ({ ...value, quality: event.target.value as DownloadOptions['quality'] }))}>{['best', '2160', '1440', '1080', '720', '480'].map(value => <option key={value} value={value}>{value === 'best' ? '最佳质量' : `${value}p 以内`}</option>)}</select></label><label>封装格式<select value={options.container} onChange={event => setOptions(value => ({ ...value, container: event.target.value as 'mp4' | 'mkv' }))}><option>mp4</option><option>mkv</option></select></label><label className="check"><input type="checkbox" checked={options.quickTimeCompatible} onChange={event => setOptions(value => ({ ...value, quickTimeCompatible: event.target.checked }))} /> QuickTime 兼容转换</label><button className="primary wide" disabled={!selected.length} onClick={() => void start()}>下载 {selected.length || ''} 个项目</button></aside></section>{jobs.length ? <section className="panel"><div className="panel-head"><div><h2>下载队列</h2><p>{jobs.filter(job => ['completed', 'skipped'].includes(job.status)).length} / {jobs.length} 已完成</p></div><button onClick={() => void api.downloads.cancel()}>全部停止</button></div><div className="task-list">{jobs.map(job => <div className="task" key={job.id}><div className="row between"><strong>{job.item.title}</strong><span className={`pill ${job.status}`}>{job.status}</span></div><div className="progress"><i style={{ width: `${job.progress}%` }} /></div><small>{job.progress.toFixed(1)}% · {job.detail || job.error || '等待中'}</small></div>)}</div></section> : null}</div>
+  return <div className="page-stack">
+    <section className="panel source">
+      <div className="segmented"><button className={mode === 'links' ? 'active' : ''} onClick={() => setMode('links')}>链接下载</button><button className={mode === 'creator' ? 'active' : ''} onClick={() => setMode('creator')}>博主主页</button></div>
+      <textarea rows={4} value={input} onChange={event => setInput(event.target.value)} placeholder={mode === 'links' ? '每行粘贴一个视频链接…' : '粘贴 YouTube 频道或 Instagram 主页…'} />
+      <div className="row between">
+        <div className="cookie-area">
+          <label>登录 Cookie <select value={options.cookieSource} onChange={event => setOptions(value => ({ ...value, cookieSource: event.target.value as 'none' | 'file' }))}><option value="none">不使用</option><option value="file">服务器 cookies.txt</option></select></label>
+          <CookieManager onUseFile={() => setOptions(value => ({ ...value, cookieSource: 'file' }))} />
+        </div>
+        <button className="primary" disabled={busy || !input.trim()} onClick={() => void (mode === 'links' ? analyze() : scan())}>{busy ? '处理中…' : mode === 'links' ? '解析链接' : '扫描主页'}</button>
+      </div>
+      {message ? <p className="notice">{message}</p> : null}
+    </section>
+    <section className="split">
+      <div className="panel"><div className="panel-head"><div><h2>待下载视频</h2><p>{selected.length} / {items.length} 项已选择</p></div></div><div className="result-list">{deferred.length ? deferred.map(item => <MediaResult key={`${item.platform}-${item.id}`} item={item} toggle={toggle} format={format} />) : <div className="empty">解析结果会显示在这里</div>}</div></div>
+      <aside className="panel settings-card"><h2>下载设置</h2><label>视频质量<select value={options.quality} onChange={event => setOptions(value => ({ ...value, quality: event.target.value as DownloadOptions['quality'] }))}>{['best', '2160', '1440', '1080', '720', '480'].map(value => <option key={value} value={value}>{value === 'best' ? '最佳质量' : `${value}p 以内`}</option>)}</select></label><label>封装格式<select value={options.container} onChange={event => setOptions(value => ({ ...value, container: event.target.value as 'mp4' | 'mkv' }))}><option>mp4</option><option>mkv</option></select></label><label className="check"><input type="checkbox" checked={options.quickTimeCompatible} onChange={event => setOptions(value => ({ ...value, quickTimeCompatible: event.target.checked }))} /> QuickTime 兼容转换</label><button className="primary wide" disabled={!selected.length} onClick={() => void start()}>下载 {selected.length || ''} 个项目</button></aside>
+    </section>
+    {jobs.length ? <section className="panel"><div className="panel-head"><div><h2>下载队列</h2><p>{jobs.filter(job => ['completed', 'skipped'].includes(job.status)).length} / {jobs.length} 已完成</p></div><button onClick={() => void api.downloads.cancel()}>全部停止</button></div><div className="task-list">{jobs.map(job => <div className="task" key={job.id}><div className="row between"><strong>{job.item.title}</strong><span className={`pill ${job.status}`}>{job.status}</span></div><div className="progress"><i style={{ width: `${job.progress}%` }} /></div><small>{job.progress.toFixed(1)}% · {job.detail || job.error || '等待中'}</small></div>)}</div></section> : null}
+  </div>
 }
 
 function PublishDialog({ assets, close, done }: { assets: MediaAsset[]; close: () => void; done: () => void }) {

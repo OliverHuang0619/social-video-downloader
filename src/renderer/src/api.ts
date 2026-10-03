@@ -1,4 +1,4 @@
-import type { AnalysisJob, AuthStatus, BrowserStatus, CodexStatus, DownloadJob, MediaAsset, PublishBatch, ScanEvent, ToolStatus, ToolUpdateEvent } from '../../shared/types'
+import type { AnalysisJob, AuthStatus, BrowserStatus, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, DownloadJob, MediaAsset, PublishBatch, ScanEvent, ToolStatus, ToolUpdateEvent } from '../../shared/types'
 
 let csrfToken = ''
 let events: EventSource | undefined
@@ -26,6 +26,12 @@ export const api = {
     async logout() { const value = await post<AuthStatus>('/api/auth/logout'); csrfToken = ''; events?.close(); return value },
   },
   tools: { status: () => request<ToolStatus>('/api/tools'), update: () => post<ToolStatus>('/api/tools/update') },
+  cookies: {
+    status: () => request<CookieManagerStatus>('/api/cookies/status'),
+    update: (platform: CookiePlatform) => post<CookieManagerStatus>('/api/cookies/update', { platform }),
+    manual: (platform: CookiePlatform, contents: string) => post<CookieManagerStatus>('/api/cookies/manual', { platform, contents }),
+    view: (reveal = false) => request<CookieFileView>(`/api/cookies/view${reveal ? '?reveal=true' : ''}`),
+  },
   source: { analyze: (urls: string[], cookieSource: 'none' | 'file') => post<import('../../shared/types').MediaItem[]>('/api/source/analyze', { urls, cookieSource }) },
   creator: { scan: (url: string, cookieSource: 'none' | 'file') => post<{ scanId: string }>('/api/creator/scan', { url, cookieSource }), stop: () => post<void>('/api/creator/stop') },
   destination: { current: () => request<string>('/api/destination') },
