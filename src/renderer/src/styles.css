@@ -604,6 +604,44 @@ button.small { min-height: 26px; padding: 0 8px; font-size: 12px; }
 .modal .warning { margin-top: 14px; }
 .modal .error { margin-top: 12px; font-size: 13px; }
 
+.remake-modal { width: min(640px, 100%); padding: 26px 28px 24px; }
+.remake-modal .modal-head { margin-bottom: 20px; }
+.remake-modal .modal-head h2 { font-size: 20px; }
+.remake-modal .modal-head p { margin-top: 6px; line-height: 1.55; }
+.remake-modal textarea { min-height: 116px; }
+.remake-modal .remake-modes { margin-top: 18px; }
+.remake-modal .remake-modes legend { margin-bottom: 9px; color: var(--ink-2); font-size: 12.5px; }
+.remake-mode-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.modal fieldset .remake-mode {
+  position: relative;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+  min-height: 92px;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--bg);
+  cursor: pointer;
+  transition: border-color .15s, background .15s, box-shadow .15s;
+}
+.modal fieldset .remake-mode:hover { border-color: #545862; background: #17181c; }
+.modal fieldset .remake-mode.selected { border-color: var(--accent-line); background: var(--accent-soft); box-shadow: inset 0 0 0 1px rgb(110 168 240 / 14%); }
+.modal fieldset .remake-mode > input[type="radio"] { width: 17px; height: 17px; min-height: 0; margin: 2px 0 0; padding: 0; accent-color: var(--accent); }
+.remake-mode > span { display: grid; align-content: start; gap: 5px; }
+.remake-mode strong { color: var(--ink); font-size: 14px; font-weight: 600; }
+.remake-mode small { color: var(--ink-3); font-size: 12px; line-height: 1.5; }
+.remake-mode > em { position: absolute; top: 10px; right: 10px; padding: 1px 6px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 10px; font-style: normal; }
+.remake-modal .warning { margin-top: 18px; }
+.remake-modal .modal-foot { padding-top: 2px; }
+
+@media (max-width: 620px) {
+  .remake-modal { padding: 20px; }
+  .remake-mode-grid { grid-template-columns: 1fr; }
+  .remake-modal .modal-foot button { flex: 1; }
+}
+
 @keyframes modal-in { from { opacity: 0; transform: translateY(6px) scale(.985); } to { opacity: 1; transform: none; } }
 
 .player { width: min(960px, 100%); position: relative; display: flex; flex-direction: column; gap: 10px; padding: 18px 20px 16px; }

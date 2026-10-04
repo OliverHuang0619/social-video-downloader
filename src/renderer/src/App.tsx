@@ -286,9 +286,11 @@ function RemakeDialog({ assets, close, done }: { assets: MediaAsset[]; close: ()
     <div className="modal remake-modal" onMouseDown={event => event.stopPropagation()}>
       <div className="modal-head"><h2>使用 Hypit 重新制作</h2><p>{assets.length} 个参考视频将分别建立原创制作工程，原文件不会被覆盖。</p></div>
       <label>原创改编方向<textarea rows={5} value={direction} onChange={event => setDirection(event.target.value)} placeholder="例如：改成轻松幽默的英文启蒙短片，重写旁白，使用全新的角色、场景与配乐…" /></label>
-      <fieldset><legend>制作范围</legend>
-        <label className="check"><input type="radio" name="remake-mode" checked={mode === 'editable'} onChange={() => setMode('editable')} />先完成原创方案与可编辑工程（不使用付费生成）</label>
-        <label className="check"><input type="radio" name="remake-mode" checked={mode === 'render'} onChange={() => setMode('render')} />使用已配置的 Hypit 服务生成并检查成片</label>
+      <fieldset className="remake-modes"><legend>制作范围</legend>
+        <div className="remake-mode-grid">
+          <label className={`remake-mode ${mode === 'editable' ? 'selected' : ''}`}><input type="radio" name="remake-mode" checked={mode === 'editable'} onChange={() => setMode('editable')} /><span><strong>可编辑工程</strong><small>先完成原创方案和完整工程，不使用付费生成</small></span><em>推荐</em></label>
+          <label className={`remake-mode ${mode === 'render' ? 'selected' : ''}`}><input type="radio" name="remake-mode" checked={mode === 'render'} onChange={() => setMode('render')} /><span><strong>生成成片</strong><small>使用已配置的 Hypit 服务生成并检查最终视频</small></span></label>
+        </div>
       </fieldset>
       {mode === 'render' ? <label>费用授权<input value={budget} onChange={event => setBudget(event.target.value)} placeholder="例如：本批最多 ¥50；或仅使用账户免费额度" /></label> : null}
       <p className="warning">重新制作会重构脚本、视觉、声音和节奏，不会采用镜像、变速、裁剪等伪原创手段；平台是否认定原创仍由平台规则与实际作品决定。</p>
