@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { rm } from 'node:fs/promises'
 import path from 'node:path'
 import { buildFormatArgs, sanitizeFilename } from '../shared/core'
-import type { DownloadJob, StartRequest } from '../shared/types'
+import type { DownloadJob, QuickTimeQuality, StartRequest } from '../shared/types'
 import type { ToolManager } from './tools'
 
 export interface ParsedDownloadOutput {
@@ -43,18 +43,30 @@ export function buildOutputTemplate(folder: string, item: StartRequest['items'][
   return path.join(folder, `${date}_${title}_[${id}].%(ext)s`)
 }
 
-/** Longest side of the QuickTime-compatible output; 4K sources are downscaled so one encode stays well under 1 GB. */
-export const QUICKTIME_MAX_EDGE = 1920
+export const DEFAULT_QUICKTIME_QUALITY: QuickTimeQuality = '1080'
+/** Longest output edge per quality tier; `original` keeps the source size. Lower tiers also get a slightly higher CRF since detail is already reduced. */
+export const QUICKTIME_PRESETS: Record<QuickTimeQuality, { maxEdge?: number; crf: number; label: string }> = {
+  original: { crf: 20, label: '保持原始分辨率' },
+  '1080': { maxEdge: 1920, crf: 22, label: '1080p 级别' },
+  '720': { maxEdge: 1280, crf: 23, label: '720p 级别' },
+}
+/** Longest side of the default QuickTime-compatible output; 4K sources are downscaled so one encode stays well under 1 GB. */
+export const QUICKTIME_MAX_EDGE = QUICKTIME_PRESETS[DEFAULT_QUICKTIME_QUALITY].maxEdge!
 
 /**
- * ffmpeg arguments for the QuickTime-compatible re-encode. Scales the longer
- * edge down to QUICKTIME_MAX_EDGE (never upscales, keeps portrait videos
- * portrait) and uses a fast x264 preset so memory and time stay bounded.
+ * ffmpeg arguments for the QuickTime-compatible re-encode. Unless the user asked
+ * to keep the original size, scales the longer edge down to the tier's limit
+ * (never upscales, keeps portrait videos portrait). Always uses a fast x264
+ * preset so memory and time stay bounded; `original` on 4K sources is the only
+ * mode that still needs ~2.5 GB, which the single transcode lane can afford.
  */
-export function quickTimeArgs(input: string, output: string) {
-  return ['-y', '-hide_banner', '-loglevel', 'error', '-stats', '-i', input, '-map', '0:v:0?', '-map', '0:a:0?',
-    '-vf', `scale=w='min(iw,${QUICKTIME_MAX_EDGE})':h='min(ih,${QUICKTIME_MAX_EDGE})':force_original_aspect_ratio=decrease:force_divisible_by=2`,
-    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', output]
+export function quickTimeArgs(input: string, output: string, quality: QuickTimeQuality = DEFAULT_QUICKTIME_QUALITY) {
+  const preset = QUICKTIME_PRESETS[quality] || QUICKTIME_PRESETS[DEFAULT_QUICKTIME_QUALITY]
+  const scale = preset.maxEdge
+    ? ['-vf', `scale=w='min(iw,${preset.maxEdge})':h='min(ih,${preset.maxEdge})':force_original_aspect_ratio=decrease:force_divisible_by=2`]
+    : ['-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2']
+  return ['-y', '-hide_banner', '-loglevel', 'error', '-stats', '-i', input, '-map', '0:v:0?', '-map', '0:a:0?', ...scale,
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', String(preset.crf), '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', output]
 }
 
 export class DownloadQueue {
@@ -187,9 +199,10 @@ export class DownloadQueue {
   private transcodeQuickTime(job: DownloadJob, ffmpeg: string, input: string) {
     const parsed = path.parse(input)
     const output = path.join(parsed.dir, `${parsed.name}.quicktime.mp4`)
-    job.detail = '正在转换为 QuickTime 兼容格式（最高 1080p）…'; job.progress = 99; this.emit()
+    const quality = job.options.quickTimeQuality || DEFAULT_QUICKTIME_QUALITY
+    job.detail = `正在转换为 QuickTime 兼容格式（${(QUICKTIME_PRESETS[quality] || QUICKTIME_PRESETS[DEFAULT_QUICKTIME_QUALITY]).label}）…`; job.progress = 99; this.emit()
     return new Promise<string>((resolve, reject) => {
-      const child = spawn(ffmpeg, quickTimeArgs(input, output), { windowsHide: true })
+      const child = spawn(ffmpeg, quickTimeArgs(input, output, quality), { windowsHide: true })
       this.active.set(job.id, child)
       let stderr = ''
       child.stderr.on('data', data => { stderr = `${stderr}${data.toString()}`.slice(-1024 * 1024) })

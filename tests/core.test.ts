@@ -154,15 +154,26 @@ describe('下载队列', () => {
     expect(parseDownloadOutput('[download] Resuming download at byte 1048576')).toEqual({ detail: '发现本地缓存，从断点继续下载…' })
     expect(parseDownloadOutput('[download] video.mp4 has already been downloaded')).toEqual({ detail: '文件已存在，复用本地文件…' })
   })
-  it('QuickTime 转码限制为 1080p 级别并使用低内存预设', () => {
+  it('QuickTime 转码默认限制为 1080p 级别并使用低内存预设', () => {
     const args = quickTimeArgs('/downloads/a.mp4', '/downloads/a.quicktime.mp4')
     const filter = args[args.indexOf('-vf') + 1]
+    expect(QUICKTIME_MAX_EDGE).toBe(1920)
     expect(filter).toContain(`min(iw,${QUICKTIME_MAX_EDGE})`)
     expect(filter).toContain('force_original_aspect_ratio=decrease')
     expect(filter).toContain('force_divisible_by=2')
     expect(args.slice(args.indexOf('-preset'), args.indexOf('-preset') + 2)).toEqual(['-preset', 'veryfast'])
     expect(args).toContain('+faststart')
     expect(args.at(-1)).toBe('/downloads/a.quicktime.mp4')
+  })
+  it('QuickTime 转码画质可选：保持原始分辨率或 720p', () => {
+    const original = quickTimeArgs('/downloads/a.mp4', '/downloads/a.quicktime.mp4', 'original')
+    expect(original[original.indexOf('-vf') + 1]).not.toContain('min(iw')
+    expect(original[original.indexOf('-vf') + 1]).toContain('trunc(iw/2)*2')
+    expect(original.slice(original.indexOf('-crf'), original.indexOf('-crf') + 2)).toEqual(['-crf', '20'])
+    const small = quickTimeArgs('/downloads/a.mp4', '/downloads/a.quicktime.mp4', '720')
+    expect(small[small.indexOf('-vf') + 1]).toContain('min(iw,1280)')
+    // Unknown values from old clients fall back to the default tier.
+    expect(quickTimeArgs('/a.mp4', '/b.mp4', 'nope' as never)).toEqual(quickTimeArgs('/a.mp4', '/b.mp4'))
   })
   it('从 ffmpeg / yt-dlp 输出中提取真正的错误原因', () => {
     const ffmpeg = 'ffmpeg version 5.1.9\n  vendor_id       : [0][0][0][0]\n  encoder         : Lavc59.37.100 aac\nframe=    1 fps=0.0 q=0.0 size=       0kB time=00:00:00.00 bitrate=N/A speed=   0x\r[aac @ 0x1] Error submitting packet\nConversion failed!\nframe=   46 fps=0.0 q=0.0 size=       0kB'

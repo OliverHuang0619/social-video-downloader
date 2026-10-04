@@ -47,7 +47,11 @@ export interface DownloadOptions {
   outputRoot: string
   cookieSource: CookieSource
   quickTimeCompatible: boolean
+  /** Output size of the QuickTime re-encode: keep the source resolution, or cap the longer edge at 1080p / 720p. */
+  quickTimeQuality?: QuickTimeQuality
 }
+
+export type QuickTimeQuality = 'original' | '1080' | '720'
 
 export interface DownloadJob {
   id: string

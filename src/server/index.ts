@@ -66,7 +66,7 @@ async function api(request: IncomingMessage, response: ServerResponse, url: URL)
   if (request.method === 'GET' && pathname === '/api/downloads/jobs') return json(response, 200, queue.snapshot())
   if (request.method === 'POST' && pathname === '/api/downloads/start') {
     const value = await body<StartRequest>(request); value.options.outputRoot = config.get().outputRoot
-    await config.patch({ cookieSource: value.options.cookieSource, options: { mode: value.options.mode, quality: value.options.quality, container: value.options.container, audioFormat: value.options.audioFormat, audioBitrate: value.options.audioBitrate, quickTimeCompatible: value.options.quickTimeCompatible } })
+    await config.patch({ cookieSource: value.options.cookieSource, options: { mode: value.options.mode, quality: value.options.quality, container: value.options.container, audioFormat: value.options.audioFormat, audioBitrate: value.options.audioBitrate, quickTimeCompatible: value.options.quickTimeCompatible, quickTimeQuality: value.options.quickTimeQuality } })
     return json(response, 200, await queue.start(value, reportDownloads))
   }
   if (request.method === 'POST' && pathname === '/api/downloads/cancel') { queue.cancel((await body<{ id?: string }>(request)).id); return json(response, 200, null) }

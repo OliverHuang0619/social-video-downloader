@@ -1,5 +1,5 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import type { AnalysisJob, BrowserStatus, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, DownloadJob, DownloadOptions, MediaAsset, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, ToolStatus } from '../../shared/types'
+import type { AnalysisJob, BrowserStatus, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, DownloadJob, DownloadOptions, MediaAsset, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, QuickTimeQuality, ToolStatus } from '../../shared/types'
 import { automaticPlatformPublishTimes, filterMediaAssets, mediaAssetDirectory, normalizePublishTopics, type LibraryStateFilter } from '../../shared/core'
 import { api, onEvent, type WorkbenchEvent } from './api'
 import './styles.css'
@@ -15,7 +15,12 @@ const taskTabs = new Set<TaskTab>(['analysis', 'publisher'])
 function storedChoice<T extends string>(key: string, allowed: Set<T>, fallback: T) {
   try { const value = window.localStorage.getItem(key) as T | null; return value && allowed.has(value) ? value : fallback } catch { return fallback }
 }
-const initialOptions: DownloadOptions = { mode: 'video', quality: 'best', container: 'mp4', audioFormat: 'mp3', audioBitrate: '192', outputRoot: '', cookieSource: 'file', quickTimeCompatible: true }
+const initialOptions: DownloadOptions = { mode: 'video', quality: 'best', container: 'mp4', audioFormat: 'mp3', audioBitrate: '192', outputRoot: '', cookieSource: 'file', quickTimeCompatible: true, quickTimeQuality: '1080' }
+const quickTimeQualities: Array<{ value: QuickTimeQuality; label: string }> = [
+  { value: '1080', label: '1080p（推荐，省内存更快）' },
+  { value: 'original', label: '保持原始分辨率' },
+  { value: '720', label: '720p（最小体积）' },
+]
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error)
 const formatDuration = (value?: number) => value ? `${Math.floor(value / 60)}:${String(Math.floor(value % 60)).padStart(2, '0')}` : '—'
 const formatGroups: Record<MediaFormatKind, string> = { 'video-audio': '视频与音频', 'video-only': '仅视频', 'audio-only': '仅音频' }
@@ -200,6 +205,8 @@ function DownloadPage({ jobs, setJobs }: { jobs: DownloadJob[]; setJobs: (jobs: 
         <label>视频质量<select value={options.quality} onChange={event => setOptions(value => ({ ...value, quality: event.target.value as DownloadOptions['quality'] }))}>{['best', '2160', '1440', '1080', '720', '480'].map(value => <option key={value} value={value}>{value === 'best' ? '最佳质量' : `${value}p 以内`}</option>)}</select></label>
         <label>封装格式<select value={options.container} onChange={event => setOptions(value => ({ ...value, container: event.target.value as 'mp4' | 'mkv' }))}><option>mp4</option><option>mkv</option></select></label>
         <label className="check"><input type="checkbox" checked={options.quickTimeCompatible} onChange={event => setOptions(value => ({ ...value, quickTimeCompatible: event.target.checked }))} />QuickTime 兼容转换</label>
+        {options.quickTimeCompatible ? <label>转换画质<select value={options.quickTimeQuality || '1080'} onChange={event => setOptions(value => ({ ...value, quickTimeQuality: event.target.value as QuickTimeQuality }))}>{quickTimeQualities.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+          <span className="hint">{options.quickTimeQuality === 'original' ? '4K 源文件转换需要约 2.5 GB 内存，耗时较长；只在确实需要原始分辨率时选择' : '仅在源文件不是 H.264/AAC 时才会转换；分辨率低于上限的视频不会被放大'}</span></label> : null}
         <button className="primary wide" disabled={!selected.length} onClick={() => void start()}>{selected.length ? `下载 ${selected.length} 个视频` : '先勾选要下载的视频'}</button>
       </aside>
     </section>

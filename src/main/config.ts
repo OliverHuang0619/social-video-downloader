@@ -6,14 +6,18 @@ import type { CookieSource, DownloadOptions } from '../shared/types'
 interface AppConfig { outputRoot: string; cookieSource: CookieSource; options: Omit<DownloadOptions, 'outputRoot' | 'cookieSource'> }
 const defaults: AppConfig = {
   outputRoot: process.env.SVD_OUTPUT_DIR || path.join(os.homedir(), 'Downloads'), cookieSource: 'file',
-  options: { mode: 'video', quality: 'best', container: 'mp4', audioFormat: 'mp3', audioBitrate: '192', quickTimeCompatible: true }
+  options: { mode: 'video', quality: 'best', container: 'mp4', audioFormat: 'mp3', audioBitrate: '192', quickTimeCompatible: true, quickTimeQuality: '1080' }
 }
 
 export class ConfigStore {
   private file = path.join(process.env.SVD_CONFIG_DIR || path.join(os.homedir(), '.config', 'social-video-downloader'), 'config.json')
   private data: AppConfig = structuredClone(defaults)
   async load() {
-    try { this.data = { ...defaults, ...JSON.parse(await readFile(this.file, 'utf8')), outputRoot: defaults.outputRoot } } catch { /* first run */ }
+    try {
+      const saved = JSON.parse(await readFile(this.file, 'utf8')) as Partial<AppConfig>
+      // Merge nested options too so settings added in later versions keep their defaults for existing installs.
+      this.data = { ...defaults, ...saved, options: { ...defaults.options, ...saved.options }, outputRoot: defaults.outputRoot }
+    } catch { /* first run */ }
     return this.data
   }
   get() { return this.data }
