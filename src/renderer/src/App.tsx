@@ -517,14 +517,16 @@ function CompareDialog({ originals, remade, close }: { originals: MediaAsset[]; 
 function RemakeTask({ job, assets, reload }: { job: RemakeJob; assets: MediaAsset[]; reload: () => void }) {
   const active = ['queued', 'preparing', 'directing', 'building'].includes(job.status)
   const [comparing, setComparing] = useState(false)
+  const logRef = useRef<HTMLDivElement>(null)
   const originals = assets.filter(asset => job.assetIds.includes(asset.id)), outputs = assets.filter(asset => job.outputs.includes(asset.file))
+  useEffect(() => { if (active && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight }, [active, job.logs.length])
   return <article className="task analysis-task">
     <div className="row between"><span className="task-title">{job.assetIds.length} 个视频 · {job.mode === 'render' ? '生成成片' : '可编辑工程'} <span className="data muted">· {job.id.slice(0, 8)}</span></span><span className={`pill ${job.status}`}>{taskNames[job.status] || job.status}</span></div>
     <div className={`progress ${job.status === 'completed' ? 'done' : job.status === 'failed' ? 'bad' : ''}`}><i style={{ width: `${job.progress}%` }} /></div>
     <p>{job.message}</p><p className="muted">{job.direction}</p>
     {job.outputs.length ? <p className="notice">已生成 {job.outputs.length} 个成片，并加入媒体库。</p> : null}
     {job.error ? <p className="error">{job.error}</p> : null}
-    <details className="analysis-details" open={active}><summary>制作记录（{job.logs.length} 条）</summary><div className="analysis-log" role="log">{job.logs.map((entry, index) => <div className={`analysis-log-line ${entry.level}`} key={`${entry.at}-${index}`}><time>{new Date(entry.at).toLocaleTimeString()}</time><span className="analysis-stage">{analysisStageNames[entry.stage]}</span><span>{entry.message}</span></div>)}</div></details>
+    <details className="analysis-details" open={active}><summary>制作记录（{job.logs.length} 条）</summary><div className="analysis-log" role="log" aria-live="polite" ref={logRef}>{job.logs.map((entry, index) => <div className={`analysis-log-line ${entry.level}`} key={`${entry.at}-${index}`}><time>{new Date(entry.at).toLocaleTimeString()}</time><span className="analysis-stage">{analysisStageNames[entry.stage]}</span><span>{entry.message}</span></div>)}</div></details>
     <div className="row end">{originals.length && outputs.length ? <button onClick={() => setComparing(true)}>前后对比与哈希</button> : null}{active ? <button onClick={() => void api.remakes.cancel(job.id).then(reload)}>取消</button> : <button className="danger-text" onClick={() => { if (window.confirm('确认删除该 Hypit 任务记录？项目工程与已生成视频会保留。')) void api.remakes.delete(job.id).then(reload) }}>删除历史</button>}</div>
     {comparing ? <CompareDialog originals={originals} remade={outputs} close={() => setComparing(false)} /> : null}
   </article>
@@ -615,12 +617,33 @@ function CodexConnectionPanel({ connection, refresh }: { connection: CodexConnec
     finally { setBusy(false) }
   }
 
+  const testConnectivity = async () => {
+    setBusy(true); setMessage('')
+    try {
+      const result = await api.codex.testConnection({
+        mode,
+        providerId: selectedId || undefined,
+        ccSwitchBaseUrl: mode === 'cc_switch' ? ccSwitchBaseUrl : undefined,
+        ccSwitchModel: mode === 'cc_switch' ? (ccSwitchModel || undefined) : undefined,
+        baseUrl: mode === 'provider' ? baseUrl : undefined,
+        apiKey: mode === 'provider' ? (apiKey || undefined) : undefined,
+      })
+      setMessage(result.ok ? result.message : `测试失败：${result.message}`)
+      if (result.ok) refresh()
+    } catch (error) { setMessage(errorText(error)) }
+    finally { setBusy(false) }
+  }
+
   return <div className="codex-connection">
-    <div className="codex-mode-row" role="radiogroup" aria-label="Codex 连接模式">
-      {([['official', '官方 ChatGPT'], ['provider', '直连供应商'], ['cc_switch', 'CC Switch 代理']] as const).map(([value, label]) => (
-        <label key={value} className={mode === value ? 'active' : ''}>
+    <div className="codex-mode-grid" role="radiogroup" aria-label="Codex 连接模式">
+      {([
+        ['official', '官方 ChatGPT', '设备码登录，使用 ChatGPT / Codex 官方额度'],
+        ['provider', '直连供应商', '填写 Base URL 与 API Key，如腾讯 Token Plan'],
+        ['cc_switch', 'CC Switch 代理', '经宿主本地代理转发，由 CC Switch 选上游'],
+      ] as const).map(([value, label, hint]) => (
+        <label key={value} className={`codex-mode ${mode === value ? 'selected' : ''}`}>
           <input type="radio" name="codex-mode" value={value} checked={mode === value} disabled={busy || (value === 'provider' && !connection.providers.length)} onChange={() => setMode(value)} />
-          <span>{label}</span>
+          <span><strong>{label}</strong><small>{hint}</small></span>
         </label>
       ))}
     </div>
@@ -631,7 +654,7 @@ function CodexConnectionPanel({ connection, refresh }: { connection: CodexConnec
         ccSwitchBaseUrl,
         ccSwitchModel: ccSwitchModel || undefined,
       }))}>应用连接模式</button>
-      <button disabled={busy} onClick={() => void run(() => api.codex.testConnection({ mode, providerId: selectedId || undefined }), '测试完成')}>测试连通</button>
+      <button disabled={busy} onClick={() => void testConnectivity()}>测试连通</button>
     </div>
 
     {mode === 'cc_switch' ? <div className="codex-form-grid">
@@ -639,7 +662,9 @@ function CodexConnectionPanel({ connection, refresh }: { connection: CodexConnec
       <label>代理模型<input value={ccSwitchModel} onChange={event => setCcSwitchModel(event.target.value)} placeholder="tc-code-latest" /></label>
     </div> : null}
 
-    <div className="codex-providers">
+    {mode === 'cc_switch' ? <p className="muted">CC Switch 模式不需要在工作台里再建供应商，上游由本机 CC Switch 选择。把代理模型改成腾讯侧实际模型（如 <code>tc-code-latest</code> 或 <code>deepseek-v4-pro</code>）后点「应用连接模式」或「测试连通」。</p> : null}
+
+    {mode !== 'cc_switch' ? <div className="codex-providers">
       <div className="row between">
         <h3>供应商</h3>
         <div className="row">
@@ -649,7 +674,7 @@ function CodexConnectionPanel({ connection, refresh }: { connection: CodexConnec
       </div>
       {connection.providers.length ? <select value={selectedId} onChange={event => setSelectedId(event.target.value)}>
         {connection.providers.map((provider: CodexProviderPublic) => <option key={provider.id} value={provider.id}>{provider.name}{provider.apiKeyConfigured ? '' : '（未配置 Key）'}{provider.id === connection.activeProviderId ? ' · 当前' : ''}</option>)}
-      </select> : <p className="muted">还没有供应商。可从腾讯模板新建。</p>}
+      </select> : <p className="muted">还没有供应商。直连模式需要先从腾讯模板新建并填写 API Key。</p>}
       {selected ? <div className="codex-form-grid">
         <label>名称<input value={name} onChange={event => setName(event.target.value)} /></label>
         <label>Base URL<input value={baseUrl} onChange={event => setBaseUrl(event.target.value)} /></label>
@@ -662,7 +687,7 @@ function CodexConnectionPanel({ connection, refresh }: { connection: CodexConnec
         <button disabled={busy} onClick={() => void run(() => api.codex.updateConnection({ mode: 'provider', activeProviderId: selected.id }))}>设为当前并直连</button>
         <button disabled={busy} onClick={() => void run(() => api.codex.deleteProvider(selected.id), '已删除供应商')}>删除</button>
       </div> : null}
-    </div>
+    </div> : null}
     {message ? <p className={/失败|错误|需要|不可|未找到|尚未|超时/.test(message) ? 'error' : 'muted'}>{message}</p> : null}
   </div>
 }

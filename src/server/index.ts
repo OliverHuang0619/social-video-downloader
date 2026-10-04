@@ -112,7 +112,14 @@ async function api(request: IncomingMessage, response: ServerResponse, url: URL)
   const providerDelete = request.method === 'DELETE' && pathname.match(/^\/api\/codex\/providers\/([^/]+)$/)
   if (providerDelete) return json(response, 200, await codex.deleteProvider(providerDelete[1]))
   if (request.method === 'POST' && pathname === '/api/codex/connection/test') {
-    return json(response, 200, await codex.testConnection(await body<{ mode?: 'official' | 'provider' | 'cc_switch'; providerId?: string }>(request)))
+    return json(response, 200, await codex.testConnection(await body<{
+      mode?: 'official' | 'provider' | 'cc_switch'
+      providerId?: string
+      ccSwitchBaseUrl?: string
+      ccSwitchModel?: string
+      baseUrl?: string
+      apiKey?: string
+    }>(request)))
   }
   if (request.method === 'POST' && pathname === '/api/codex/login') { codex.login(); return json(response, 202, await codex.status()) }
   if (request.method === 'POST' && pathname === '/api/codex/login/cancel') { codex.cancelLogin(); return json(response, 200, await codex.status()) }

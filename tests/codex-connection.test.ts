@@ -81,6 +81,11 @@ describe('Codex 多平台连接辅助', () => {
       ccSwitchReasoningEffort: 'low',
       providers: [provider],
     }, env)).toEqual({ model: 'proxy-model', reasoningEffort: 'low' })
+    expect(resolveActiveModel({
+      mode: 'cc_switch',
+      ccSwitchBaseUrl: DEFAULT_CC_SWITCH_BASE_URL,
+      providers: [],
+    }, env)).toEqual({ model: 'tc-code-latest', reasoningEffort: 'high' })
   })
 
   it('生成 models 探测 URL 且避免重复 v1', () => {

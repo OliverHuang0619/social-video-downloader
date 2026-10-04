@@ -10,6 +10,7 @@ import type {
 } from '../shared/types'
 
 export const DEFAULT_CC_SWITCH_BASE_URL = 'http://host.docker.internal:15721/v1'
+export const DEFAULT_CC_SWITCH_MODEL = 'tc-code-latest'
 export const OFFICIAL_AUTH_STASH = 'official-auth.stash.json'
 export const CONNECTION_FILE = 'codex-providers.json'
 
@@ -92,8 +93,8 @@ export function resolveActiveModel(
   if (config.mode === 'cc_switch') {
     const provider = config.providers.find(item => item.id === config.activeProviderId)
     return {
-      model: config.ccSwitchModel || provider?.model || envDefaults.model,
-      reasoningEffort: (config.ccSwitchReasoningEffort || provider?.reasoningEffort || envDefaults.reasoningEffort).toLowerCase(),
+      model: config.ccSwitchModel || provider?.model || DEFAULT_CC_SWITCH_MODEL,
+      reasoningEffort: (config.ccSwitchReasoningEffort || provider?.reasoningEffort || 'high').toLowerCase(),
     }
   }
   return envDefaults

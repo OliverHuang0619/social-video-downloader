@@ -53,7 +53,7 @@ export const api = {
     createProvider: (value: Record<string, unknown>) => post<CodexProviderPublic>('/api/codex/providers', value),
     updateProvider: (id: string, value: Record<string, unknown>) => request<CodexProviderPublic>(`/api/codex/providers/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(value) }),
     deleteProvider: (id: string) => request<CodexConnectionPublic>(`/api/codex/providers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-    testConnection: (value: { mode?: CodexConnectionPublic['mode']; providerId?: string } = {}) => post<CodexConnectionTestResult>('/api/codex/connection/test', value),
+    testConnection: (value: { mode?: CodexConnectionPublic['mode']; providerId?: string; ccSwitchBaseUrl?: string; ccSwitchModel?: string; baseUrl?: string; apiKey?: string } = {}) => post<CodexConnectionTestResult>('/api/codex/connection/test', value),
   },
   publisher: { status: () => request<BrowserStatus>('/api/publisher/status'), login: () => post<BrowserStatus>('/api/publisher/login'), jobs: () => request<PublishBatch[]>('/api/publisher/jobs'), publish: (value: unknown) => post<PublishBatch>('/api/publisher/publish', value), retry: (id: string) => post<void>(`/api/publisher/jobs/${id}/retry`), cancelBatch: (id: string) => post<void>(`/api/publisher/batches/${id}/cancel`), deleteBatch: (id: string) => request<void>(`/api/publisher/batches/${id}`, { method: 'DELETE' }) },
 }

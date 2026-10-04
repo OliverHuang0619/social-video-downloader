@@ -13,6 +13,7 @@ import type {
 } from '../shared/types'
 import {
   CodexConnectionStore,
+  DEFAULT_CC_SWITCH_MODEL,
   mergeProviderUpdate,
   modelsProbeUrl,
   removeLiveAuth,
@@ -217,6 +218,7 @@ export class CodexService {
     if (patch.activeProviderId !== undefined) next.activeProviderId = patch.activeProviderId || undefined
     if (patch.ccSwitchModel !== undefined) next.ccSwitchModel = patch.ccSwitchModel?.trim() || undefined
     if (patch.ccSwitchReasoningEffort !== undefined) next.ccSwitchReasoningEffort = patch.ccSwitchReasoningEffort?.trim() || undefined
+    if (next.mode === 'cc_switch' && !next.ccSwitchModel) next.ccSwitchModel = DEFAULT_CC_SWITCH_MODEL
     await this.connection.save(next)
     await this.applyConnection()
     return this.connectionPublic()
@@ -278,7 +280,14 @@ export class CodexService {
     return this.connectionPublic()
   }
 
-  async testConnection(input: { mode?: CodexConnectionConfig['mode']; providerId?: string } = {}): Promise<CodexConnectionTestResult> {
+  async testConnection(input: {
+    mode?: CodexConnectionConfig['mode']
+    providerId?: string
+    ccSwitchBaseUrl?: string
+    ccSwitchModel?: string
+    baseUrl?: string
+    apiKey?: string
+  } = {}): Promise<CodexConnectionTestResult> {
     const config = this.connection.get()
     const mode = input.mode || config.mode
     if (mode === 'official') {
@@ -287,12 +296,21 @@ export class CodexService {
       return { ok: false, message: cleanCodexOutput(login.output) || '官方 Codex 尚未登录' }
     }
     if (mode === 'cc_switch') {
-      return probeModels(modelsProbeUrl(config.ccSwitchBaseUrl))
+      const baseUrl = input.ccSwitchBaseUrl?.trim() || config.ccSwitchBaseUrl
+      const model = input.ccSwitchModel?.trim() || config.ccSwitchModel || DEFAULT_CC_SWITCH_MODEL
+      const result = await probeModels(modelsProbeUrl(baseUrl))
+      if (!result.ok) return { ok: false, message: `CC Switch 不可达（${modelsProbeUrl(baseUrl)}）：${result.message}` }
+      await this.updateConnection({ mode: 'cc_switch', ccSwitchBaseUrl: baseUrl, ccSwitchModel: model })
+      return { ok: true, message: `CC Switch 可达，已切换到模型 ${model}` }
     }
     const provider = config.providers.find(item => item.id === (input.providerId || config.activeProviderId))
-    if (!provider) return { ok: false, message: '未找到要测试的供应商' }
-    if (!provider.apiKey.trim()) return { ok: false, message: '供应商尚未配置 API Key' }
-    return probeModels(modelsProbeUrl(provider.baseUrl), provider.apiKey)
+    const baseUrl = input.baseUrl?.trim() || provider?.baseUrl || ''
+    const apiKey = input.apiKey?.trim() || provider?.apiKey || ''
+    if (!baseUrl) return { ok: false, message: '未找到要测试的供应商或 Base URL' }
+    if (!apiKey) return { ok: false, message: '供应商尚未配置 API Key' }
+    const result = await probeModels(modelsProbeUrl(baseUrl), apiKey)
+    if (result.ok) return { ok: true, message: `供应商可达：${modelsProbeUrl(baseUrl)}` }
+    return { ok: false, message: `供应商不可达（${modelsProbeUrl(baseUrl)}）：${result.message}` }
   }
 
   async status(): Promise<CodexStatus> {
