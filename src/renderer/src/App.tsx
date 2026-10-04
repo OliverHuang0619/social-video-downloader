@@ -158,7 +158,7 @@ function CookieManager({ cookieSource, setCookieSource }: { cookieSource: 'none'
 }
 
 function DownloadPage({ jobs, setJobs }: { jobs: DownloadJob[]; setJobs: (jobs: DownloadJob[]) => void }) {
-  const [mode, setMode] = useState<'links' | 'creator'>('links'), [input, setInput] = useState(''), [items, setItems] = useState<MediaItem[]>([]), [options, setOptions] = useState(initialOptions), [message, setMessage] = useState(''), [busy, setBusy] = useState(false), [showFinished, setShowFinished] = useState(false)
+  const [mode, setMode] = useState<'links' | 'creator'>('links'), [input, setInput] = useState(''), [items, setItems] = useState<MediaItem[]>([]), [options, setOptions] = useState(initialOptions), [message, setMessage] = useState(''), [busy, setBusy] = useState(false), [queueView, setQueueView] = useState<'active' | 'failed' | 'all'>('active')
   const deferred = useDeferredValue(items), selected = useMemo(() => items.filter(item => item.selected), [items])
   useEffect(() => { void Promise.all([api.destination.current(), api.downloads.list()]).then(([outputRoot, history]) => { setOptions(value => ({ ...value, outputRoot })); if (history.length) setJobs(history) }) }, [setJobs])
   useEffect(() => onEvent(raw => { const event = raw as WorkbenchEvent; if (event.type === 'downloads') setJobs(event.jobs); if (event.type === 'creator') { const update = event.event; if (update.type === 'item') setItems(current => current.some(item => item.id === update.item.id) ? current : [...current, update.item]); if (update.type === 'status') setMessage(update.message); if (update.type === 'done') { setBusy(false); setMessage(`扫描完成，共 ${update.count} 个视频`) } if (update.type === 'error') { setBusy(false); setMessage(update.message) } } }), [setJobs])
@@ -169,9 +169,11 @@ function DownloadPage({ jobs, setJobs }: { jobs: DownloadJob[]; setJobs: (jobs: 
   const setCookieSource = useCallback((cookieSource: 'none' | 'file') => setOptions(value => ({ ...value, cookieSource })), [])
   const start = async () => { try { setJobs(await api.downloads.start({ items: selected, options })); toast(`已创建 ${selected.length} 个下载任务`); setMessage('下载完成后会自动进入媒体库') } catch (error) { setMessage(errorText(error)) } }
   const allSelected = items.length > 0 && selected.length === items.length
-  const active = jobs.filter(job => ['queued', 'downloading'].includes(job.status)), finished = jobs.filter(job => !['queued', 'downloading'].includes(job.status))
-  const failed = finished.filter(job => job.status === 'failed').length
-  const visibleJobs = showFinished ? jobs : active
+  const newestFirst = useMemo(() => [...jobs].reverse(), [jobs])
+  const active = newestFirst.filter(job => ['queued', 'downloading'].includes(job.status)), failedJobs = newestFirst.filter(job => job.status === 'failed')
+  const finished = jobs.length - active.length
+  const visibleJobs = queueView === 'all' ? newestFirst : queueView === 'failed' ? failedJobs : active
+  const retry = async (id?: string) => { try { const result = await api.downloads.retry(id); toast(id ? '已重新加入队列，将复用本地已下载的部分' : `已重试 ${result.count} 个失败任务`) } catch (error) { toast(errorText(error), 'bad') } }
   return <div className="page-stack">
     <section className="panel source">
       <div className="source-head">
@@ -203,17 +205,22 @@ function DownloadPage({ jobs, setJobs }: { jobs: DownloadJob[]; setJobs: (jobs: 
     </section>
     {jobs.length ? <section className="panel">
       <div className="panel-head">
-        <div><h2>下载队列</h2><p>{active.length} 进行中 · {finished.length - failed} 已结束{failed ? ` · ${failed} 失败` : ''}</p></div>
+        <div><h2>下载队列</h2><p>{active.length} 进行中 · {finished - failedJobs.length} 已完成{failedJobs.length ? ` · ${failedJobs.length} 失败` : ''}</p></div>
         <div className="row">
-          {finished.length ? <button className="ghost" onClick={() => setShowFinished(value => !value)}>{showFinished ? '只看进行中' : `显示已结束（${finished.length}）`}</button> : null}
-          {active.length ? <button onClick={() => void api.downloads.cancel()}>全部停止</button> : null}
+          <div className="state-chips" role="tablist" aria-label="队列视图">
+            <button role="tab" aria-selected={queueView === 'active'} className={`chip ${queueView === 'active' ? 'active' : ''}`} onClick={() => setQueueView('active')}>进行中<em>{active.length}</em></button>
+            <button role="tab" aria-selected={queueView === 'failed'} className={`chip ${queueView === 'failed' ? 'active' : ''} ${failedJobs.length ? 'has-failed' : ''}`} onClick={() => setQueueView('failed')}>失败<em>{failedJobs.length}</em></button>
+            <button role="tab" aria-selected={queueView === 'all'} className={`chip ${queueView === 'all' ? 'active' : ''}`} onClick={() => setQueueView('all')}>全部<em>{jobs.length}</em></button>
+          </div>
+          {failedJobs.length ? <button onClick={() => void retry()}>重试全部失败</button> : null}
+          {active.length ? <button className="ghost" onClick={() => void api.downloads.cancel()}>全部停止</button> : null}
         </div>
       </div>
-      <div className="task-list">{visibleJobs.length ? visibleJobs.map(job => <div className="task" key={job.id}>
-        <div className="row between"><span className="task-title" title={job.item.title}>{job.item.title}</span><span className={`pill ${job.status}`}>{taskNames[job.status] || job.status}</span></div>
+      <div className="task-list">{visibleJobs.length ? visibleJobs.map(job => <div className={`task ${job.status === 'failed' ? 'task-failed' : ''}`} key={job.id}>
+        <div className="row between"><span className="task-title" title={job.item.title}>{job.item.title}</span><span className="row">{['failed', 'cancelled'].includes(job.status) ? <button className="ghost small" onClick={() => void retry(job.id)}>重试</button> : null}<span className={`pill ${job.status}`}>{taskNames[job.status] || job.status}</span></span></div>
         <div className={`progress ${['completed', 'skipped'].includes(job.status) ? 'done' : job.status === 'failed' ? 'bad' : ''}`}><i style={{ width: `${job.progress}%` }} /></div>
-        <div className="task-meta"><span className="data">{job.progress.toFixed(1)}%</span><span>·</span><span>{job.error || job.detail || '等待中'}</span></div>
-      </div>) : <div className="empty small">没有进行中的下载</div>}</div>
+        {job.status === 'failed' ? <p className="error task-error">{job.error || '下载失败'}</p> : <div className="task-meta"><span className="data">{job.progress.toFixed(1)}%</span><span>·</span><span>{job.detail || '等待中'}</span>{job.speed ? <span className="data">· {job.speed}</span> : null}{job.eta ? <span className="data">· 剩余 {job.eta}</span> : null}</div>}
+      </div>) : <div className="empty small">{queueView === 'failed' ? '没有失败的下载' : queueView === 'active' ? '没有进行中的下载' : '队列为空'}</div>}</div>
     </section> : null}
   </div>
 }

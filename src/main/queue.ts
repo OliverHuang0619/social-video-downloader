@@ -16,12 +16,23 @@ export interface ParsedDownloadOutput {
 export function parseDownloadOutput(line: string): ParsedDownloadOutput | undefined {
   const progress = line.match(/^svd:\s*([\d.]+)%\|([^|]*)\|([^|]*)/)
   if (progress) return { progress: Number(progress[1]), speed: progress[2].trim(), eta: progress[3].trim(), detail: '正在下载媒体文件…' }
+  if (/Resuming download at byte|Resuming download at fragment/i.test(line)) return { detail: '发现本地缓存，从断点继续下载…' }
+  if (/already been downloaded/i.test(line)) return { detail: '文件已存在，复用本地文件…' }
   if (/Extracting cookies from|Loading cookies/i.test(line)) return { detail: '正在读取服务器 Cookie 文件…' }
   if (/Extracted \d+ cookies/i.test(line)) return { detail: 'Cookie 读取完成，正在获取视频信息…' }
   if (/Downloading video info|Extracting URL/i.test(line)) return { detail: '正在获取 Instagram 视频信息…' }
   if (/\[download\] Destination:/i.test(line)) return { detail: '正在下载媒体文件…' }
   if (/\[(?:Merger|VideoRemuxer|ExtractAudio|FFmpeg)\]/i.test(line)) return { detail: '正在合并并处理媒体文件…' }
   return undefined
+}
+
+/** Picks the lines of yt-dlp/ffmpeg stderr that explain a failure, skipping progress and metadata noise. */
+export function summarizeProcessError(stderr: string, fallback: string) {
+  const lines = stderr.split(/\r?\n|\r/).map(line => line.trim()).filter(Boolean)
+  const noise = /^(frame=|size=|video:|ffmpeg version|built with|configuration:|lib(?:av|sw|post)\w*\s|\[?(?:vendor_id|encoder|handler_name|major_brand|minor_version|compatible_brands|creation_time|Stream|Metadata|Duration|Input|Output|Press|Side data|Guessed Channel))/i
+  const meaningful = lines.filter(line => !noise.test(line))
+  const errors = meaningful.filter(line => /error|invalid|fail|cannot|could not|unable|not found|no such|denied|unsupported|unavailable|forbidden|timed? ?out|does not contain/i.test(line))
+  return (errors.length ? errors : meaningful).slice(-3).join('\n') || fallback
 }
 
 export function buildOutputTemplate(folder: string, item: StartRequest['items'][number]) {
@@ -37,6 +48,11 @@ export class DownloadQueue {
   constructor(private tools: ToolManager) {}
   snapshot() { return [...this.jobs.values()] }
   get(id: string) { return this.jobs.get(id) }
+  setReporter(report: (jobs: DownloadJob[]) => void) { this.report = report }
+  /** Loads persisted jobs (e.g. after a restart) so history stays visible and failed jobs remain retryable. */
+  hydrate(jobs: DownloadJob[]) {
+    for (const job of [...jobs].reverse()) if (!this.jobs.has(job.id)) this.jobs.set(job.id, { ...job, status: ['queued', 'downloading'].includes(job.status) ? 'failed' : job.status, speed: undefined, eta: undefined })
+  }
   async start(request: StartRequest, report?: (jobs: DownloadJob[]) => void) {
     if (report) this.report = report
     for (const item of request.items) { const id = randomUUID(); this.jobs.set(id, { id, item, options: request.options, status: 'queued', progress: 0, attempts: 0 }) }
@@ -46,7 +62,18 @@ export class DownloadQueue {
     if (id) this.cancelOne(id); else for (const jobId of this.jobs.keys()) this.cancelOne(jobId)
     this.emit()
   }
-  retry(id: string) { const job = this.jobs.get(id); if (!job || !['failed', 'cancelled'].includes(job.status)) return; job.status = 'queued'; job.error = undefined; job.progress = 0; job.attempts = 0; this.emit(); this.pump() }
+  /**
+   * Re-queues a failed or cancelled job. yt-dlp runs with --continue and
+   * --no-overwrites, so partially downloaded .part files and already finished
+   * files on disk are reused instead of downloading from scratch.
+   */
+  retry(id: string) { if (this.requeue(id)) { this.emit(); this.pump() } }
+  retryFailed() { let count = 0; for (const job of this.jobs.values()) if (job.status === 'failed' && this.requeue(job.id)) count++; if (count) { this.emit(); this.pump() } return count }
+  private requeue(id: string) {
+    const job = this.jobs.get(id); if (!job || !['failed', 'cancelled'].includes(job.status)) return false
+    job.status = 'queued'; job.error = undefined; job.progress = 0; job.attempts = 0; job.speed = undefined; job.eta = undefined; job.detail = '等待重试，将复用本地已下载的部分'
+    return true
+  }
   shutdown() { for (const child of this.active.values()) child.kill('SIGTERM') }
   private cancelOne(id: string) { const job = this.jobs.get(id); if (!job || ['completed', 'skipped'].includes(job.status)) return; job.status = 'cancelled'; this.active.get(id)?.kill('SIGTERM'); this.active.delete(id) }
   private pump() {
@@ -122,7 +149,7 @@ export class DownloadQueue {
         }
       }
       else if (job.attempts < 3) { job.status = 'queued'; job.detail = `第 ${job.attempts} 次尝试失败，正在重试…`; job.error = undefined }
-      else { job.status = 'failed'; job.detail = undefined; job.error = error.trim().split(/\r?\n/).slice(-3).join('\n') || '下载失败' }
+      else { job.status = 'failed'; job.detail = undefined; job.error = summarizeProcessError(error, '下载失败') }
       this.emit(); this.pump()
     })() })
     child.on('error', err => { this.active.delete(job.id); job.status = 'failed'; job.error = err.message; this.emit(); this.pump() })
@@ -140,7 +167,7 @@ export class DownloadQueue {
       child.on('close', code => {
         this.active.delete(job.id)
         if (job.status === 'cancelled') { reject(new Error('转换已取消')); return }
-        if (code !== 0) { reject(new Error(stderr.trim().split(/\r?\n/).slice(-3).join('\n') || 'QuickTime 转换失败')); return }
+        if (code !== 0) { reject(new Error(`QuickTime 转换失败：${summarizeProcessError(stderr, '未知错误')}`)); return }
         void rm(input, { force: true }).then(() => resolve(output), reject)
       })
     })

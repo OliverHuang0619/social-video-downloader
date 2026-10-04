@@ -421,6 +421,10 @@ label > input:not([type="checkbox"]), label > select, label > textarea { display
 .task-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .task-meta { display: flex; gap: 6px; align-items: baseline; color: var(--ink-3); font-size: 12px; }
 
+.task-error { margin-top: 2px; font-size: 12px; line-height: 1.5; max-height: 72px; overflow: auto; }
+.chip.has-failed:not(.active) em { color: var(--bad); }
+button.small { min-height: 26px; padding: 0 8px; font-size: 12px; }
+
 .progress { height: 4px; margin: 10px 0 8px; overflow: hidden; border-radius: 999px; background: var(--inset); }
 .progress i { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .25s ease; }
 .progress.done i { background: var(--ok); }

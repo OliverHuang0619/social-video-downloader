@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { automaticPlatformPublishTimes, buildFormatArgs, detectPlatform, filterMediaAssets, formatsFromYtDlp, localPublishSubmissionTimes, mediaAssetDirectory, nextSafePlatformPublishTime, normalizePublishTopics, normalizeUrls, randomPublishSubmissionDelayMs, sanitizeFilename } from '../src/shared/core'
-import { buildOutputTemplate, DownloadQueue, parseDownloadOutput } from '../src/main/queue'
+import { buildOutputTemplate, DownloadQueue, parseDownloadOutput, summarizeProcessError } from '../src/main/queue'
 import { classifyError, mediaFromGalleryDlLine, youtubeAttemptSources, youtubeCookieArgs } from '../src/main/media'
 import { CodexService, cleanCodexOutput, parseCodexLoginOutput, parseCodexRateLimits, resolveCodexAnalysisConfig } from '../src/server/codex'
 import { executeAnalysisProcess, parseCodexProgressLine } from '../src/server/analysis'
@@ -151,6 +151,32 @@ describe('下载队列', () => {
     expect(parseDownloadOutput('svd: 11.6%|36.04KiB/s|00:29')).toEqual({ progress: 11.6, speed: '36.04KiB/s', eta: '00:29', detail: '正在下载媒体文件…' })
     expect(parseDownloadOutput('Extracting cookies from chrome')).toEqual({ detail: '正在读取服务器 Cookie 文件…' })
     expect(parseDownloadOutput('[Merger] Merging formats into "video.mp4"')).toEqual({ detail: '正在合并并处理媒体文件…' })
+    expect(parseDownloadOutput('[download] Resuming download at byte 1048576')).toEqual({ detail: '发现本地缓存，从断点继续下载…' })
+    expect(parseDownloadOutput('[download] video.mp4 has already been downloaded')).toEqual({ detail: '文件已存在，复用本地文件…' })
+  })
+  it('从 ffmpeg / yt-dlp 输出中提取真正的错误原因', () => {
+    const ffmpeg = 'ffmpeg version 5.1.9\n  vendor_id       : [0][0][0][0]\n  encoder         : Lavc59.37.100 aac\nframe=    1 fps=0.0 q=0.0 size=       0kB time=00:00:00.00 bitrate=N/A speed=   0x\r[aac @ 0x1] Error submitting packet\nConversion failed!\nframe=   46 fps=0.0 q=0.0 size=       0kB'
+    expect(summarizeProcessError(ffmpeg, '未知错误')).toBe('[aac @ 0x1] Error submitting packet\nConversion failed!')
+    expect(summarizeProcessError('ERROR: [youtube] abc: Sign in to confirm you’re not a bot', '下载失败')).toContain('Sign in')
+    expect(summarizeProcessError('frame= 1 fps=0.0\n', '下载失败')).toBe('下载失败')
+  })
+  it('重启后恢复历史任务，失败任务可单个或批量重试并复用缓存', async () => {
+    const queue = new DownloadQueue({ resolve: async () => undefined } as never)
+    const item = (id: string): MediaItem => ({ id, sourceUrl: `https://example.com/${id}`, platform: 'other', title: id, uploader: '', duration: 0, thumbnail: '', publishedAt: '', selected: true, kind: 'video' })
+    const persisted = ['a', 'b', 'c'].map((id, index) => ({ id, item: item(id), options, status: (['failed', 'completed', 'downloading'] as const)[index], progress: index * 10, attempts: 3, error: index === 0 ? '网络中断' : undefined }))
+    queue.hydrate(persisted); queue.hydrate(persisted)
+    expect(queue.snapshot()).toHaveLength(3)
+    expect(queue.get('c')?.status).toBe('failed')
+    const reported: string[][] = []
+    queue.setReporter(jobs => reported.push(jobs.map(job => `${job.id}:${job.status}`)))
+    expect(queue.retryFailed()).toBe(2)
+    expect(reported[0]).toEqual(['c:queued', 'b:completed', 'a:queued'])
+    // pump() reserves a slot right away, so the first attempt is already counted.
+    expect(queue.get('a')).toMatchObject({ status: 'downloading', attempts: 1, progress: 0, error: undefined })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(queue.get('a')).toMatchObject({ status: 'failed', error: '未找到 yt-dlp' })
+    expect(queue.get('b')?.status).toBe('completed')
+    queue.retry('b'); expect(queue.get('b')?.status).toBe('completed')
   })
   it('工具解析尚未完成时也只预留三个并发任务', async () => {
     const never = new Promise<string | undefined>(() => undefined)

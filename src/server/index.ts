@@ -29,6 +29,8 @@ const publish = (event: ServerEvent) => { const data = `data: ${JSON.stringify(e
 const changed = (type: 'library' | 'analysis' | 'publisher' | 'codex') => publish({ type, at: new Date().toISOString() })
 const config = new ConfigStore(), tools = new ToolManager(), media = new MediaService(tools), queue = new DownloadQueue(tools)
 const db = new AppDatabase(), auth = new AuthService(db), library = new LibraryService(db), codex = new CodexService(() => changed('codex'))
+const reportDownloads = (jobs: ReturnType<DownloadQueue['snapshot']>) => { void library.syncDownloads(jobs).then(() => changed('library')); publish({ type: 'downloads', jobs }) }
+queue.setReporter(reportDownloads); queue.hydrate(db.downloads())
 const analysis = new AnalysisService(db, codex, () => changed('analysis')), publisher = new PublisherService(db, () => changed('publisher'))
 const youtubeCookies = new YoutubeCookieService()
 const port = Number(process.env.PORT || 3000), host = process.env.HOST || '0.0.0.0'
@@ -61,14 +63,14 @@ async function api(request: IncomingMessage, response: ServerResponse, url: URL)
   if (request.method === 'POST' && pathname === '/api/creator/stop') { media.stop(); return json(response, 200, null) }
   if (request.method === 'GET' && pathname === '/api/destination') return json(response, 200, config.get().outputRoot)
   const oldFile = request.method === 'GET' && pathname.match(/^\/api\/downloads\/([0-9a-f-]+)\/file$/); if (oldFile) return downloadFile(oldFile[1], response)
-  if (request.method === 'GET' && pathname === '/api/downloads/jobs') return json(response, 200, db.downloads())
+  if (request.method === 'GET' && pathname === '/api/downloads/jobs') return json(response, 200, queue.snapshot())
   if (request.method === 'POST' && pathname === '/api/downloads/start') {
     const value = await body<StartRequest>(request); value.options.outputRoot = config.get().outputRoot
     await config.patch({ cookieSource: value.options.cookieSource, options: { mode: value.options.mode, quality: value.options.quality, container: value.options.container, audioFormat: value.options.audioFormat, audioBitrate: value.options.audioBitrate, quickTimeCompatible: value.options.quickTimeCompatible } })
-    return json(response, 200, await queue.start(value, jobs => { void library.syncDownloads(jobs).then(() => changed('library')); publish({ type: 'downloads', jobs }) }))
+    return json(response, 200, await queue.start(value, reportDownloads))
   }
   if (request.method === 'POST' && pathname === '/api/downloads/cancel') { queue.cancel((await body<{ id?: string }>(request)).id); return json(response, 200, null) }
-  if (request.method === 'POST' && pathname === '/api/downloads/retry') { queue.retry((await body<{ id: string }>(request)).id); return json(response, 200, null) }
+  if (request.method === 'POST' && pathname === '/api/downloads/retry') { const value = await body<{ id?: string }>(request); if (value.id) { queue.retry(String(value.id)); return json(response, 200, { count: 1 }) } return json(response, 200, { count: queue.retryFailed() }) }
   if (request.method === 'GET' && pathname === '/api/library') return json(response, 200, db.assets())
   if (request.method === 'POST' && pathname === '/api/library/import') return json(response, 200, await library.importDirectory(String((await body<{ directory: string }>(request)).directory || '')))
   if (request.method === 'POST' && pathname === '/api/library/delete') { const value = await body<{ ids: string[]; deleteFiles?: boolean }>(request); const result = await library.deleteAssets(Array.isArray(value.ids) ? value.ids : [], Boolean(value.deleteFiles)); changed('library'); return json(response, 200, result) }
