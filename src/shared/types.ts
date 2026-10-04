@@ -165,7 +165,55 @@ export interface PublishBatch {
 export interface AuthStatus { authenticated: boolean; csrfToken?: string }
 export interface CodexUsageWindow { usedPercent: number; remainingPercent: number; windowDurationMins?: number; resetsAt?: number }
 export interface CodexUsageStatus { planType?: string; ordinaryUsageAllowed?: boolean; limits: Array<{ id: string; name?: string; primary?: CodexUsageWindow; secondary?: CodexUsageWindow }> }
-export interface CodexStatus { available: boolean; authenticated: boolean; busy: boolean; message: string; model: string; reasoningEffort: string; usage?: CodexUsageStatus; usageUnavailable?: boolean; loginOutput?: string; loginUrl?: string; loginCode?: string }
+export type CodexConnectionMode = 'official' | 'provider' | 'cc_switch'
+export type CodexProviderTemplate = 'tencent_token_plan' | 'custom'
+export interface CodexProvider {
+  id: string
+  name: string
+  template?: CodexProviderTemplate
+  baseUrl: string
+  apiKey: string
+  model: string
+  reasoningEffort?: string
+  wireApi: 'responses'
+  requiresOpenaiAuth: boolean
+}
+export interface CodexConnectionConfig {
+  mode: CodexConnectionMode
+  activeProviderId?: string
+  ccSwitchBaseUrl: string
+  ccSwitchModel?: string
+  ccSwitchReasoningEffort?: string
+  providers: CodexProvider[]
+}
+export interface CodexProviderPublic extends Omit<CodexProvider, 'apiKey'> {
+  apiKeyMasked: string
+  apiKeyConfigured: boolean
+}
+export interface CodexConnectionPublic {
+  mode: CodexConnectionMode
+  activeProviderId?: string
+  ccSwitchBaseUrl: string
+  ccSwitchModel?: string
+  ccSwitchReasoningEffort?: string
+  providers: CodexProviderPublic[]
+}
+export interface CodexConnectionTestResult { ok: boolean; message: string }
+export interface CodexStatus {
+  available: boolean
+  authenticated: boolean
+  busy: boolean
+  message: string
+  model: string
+  reasoningEffort: string
+  mode: CodexConnectionMode
+  connection?: CodexConnectionPublic
+  usage?: CodexUsageStatus
+  usageUnavailable?: boolean
+  loginOutput?: string
+  loginUrl?: string
+  loginCode?: string
+}
 export interface BrowserStatus { ready: boolean; mode: 'container' | 'host'; loginStatus: 'unknown' | 'ready' | 'needs_login' | 'needs_attention'; message: string; remoteUrl: string; manageUrl: string }
 export type CookiePlatform = 'youtube' | 'instagram'
 export interface PlatformCookieStatus { status: 'idle' | 'opening' | 'waiting_login' | 'saving' | 'ready' | 'error'; running: boolean; message: string; cookieCount?: number; updatedAt?: string }
