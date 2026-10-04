@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { createReadStream } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { mkdir, readdir, realpath, rename, rm, stat } from 'node:fs/promises'
 import type { ServerResponse } from 'node:http'
 import path from 'node:path'
@@ -13,6 +14,7 @@ const VIDEO_MIME: Record<string, string> = { '.mp4': 'video/mp4', '.m4v': 'video
 export class LibraryService {
   private roots: string[]
   private thumbnailJobs = new Map<string, Promise<string>>()
+  private hashCache = new Map<string, { key: string; value: { algorithm: 'sha256'; hash: string; size: number; modifiedAt: string } }>()
   private thumbnailActive = 0
   private thumbnailWaiters: Array<() => void> = []
   constructor(private db: AppDatabase) { this.roots = [process.env.SVD_OUTPUT_DIR || '/downloads', process.env.SVD_IMPORT_DIR || '/imports'].map(value => path.resolve(value)) }
@@ -119,5 +121,14 @@ export class LibraryService {
     if (requestRange) { const match = requestRange.match(/^bytes=(\d*)-(\d*)$/); if (!match) throw Object.assign(new Error('无效 Range'), { statusCode: 416 }); start = match[1] ? Number(match[1]) : Math.max(0, info.size - Number(match[2])); end = match[2] ? Math.min(Number(match[2]), info.size - 1) : info.size - 1; if (start > end || start >= info.size) throw Object.assign(new Error('无效 Range'), { statusCode: 416 }); statusCode = 206 }
     response.writeHead(statusCode, { 'content-type': attachment ? 'application/octet-stream' : VIDEO_MIME[path.extname(file).toLowerCase()] || 'application/octet-stream', 'content-length': end - start + 1, 'accept-ranges': 'bytes', ...(statusCode === 206 ? { 'content-range': `bytes ${start}-${end}/${info.size}` } : {}), ...(attachment ? { 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(asset.filename)}` } : {}) })
     createReadStream(file, { start, end }).pipe(response)
+  }
+  async fileHash(id: string) {
+    const asset = this.db.asset(id); if (!asset) throw Object.assign(new Error('视频不存在'), { statusCode: 404 })
+    const file = await this.allowed(asset.file); if (!file) throw Object.assign(new Error('不允许访问该文件'), { statusCode: 403 })
+    const info = await stat(file), key = `${file}:${info.size}:${info.mtimeMs}`, cached = this.hashCache.get(id)
+    if (cached?.key === key) return cached.value
+    const hash = await new Promise<string>((resolve, reject) => { const digest = createHash('sha256'), stream = createReadStream(file); stream.on('data', chunk => digest.update(chunk)); stream.once('error', reject); stream.once('end', () => resolve(digest.digest('hex'))) })
+    const value = { algorithm: 'sha256' as const, hash, size: info.size, modifiedAt: info.mtime.toISOString() }
+    this.hashCache.set(id, { key, value }); return value
   }
 }

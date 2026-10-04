@@ -102,6 +102,8 @@ export interface MediaAsset {
   updatedAt: string
 }
 
+export interface MediaFileHash { algorithm: 'sha256'; hash: string; size: number; modifiedAt: string }
+
 export interface AnalysisJob {
   id: string
   status: AnalysisJobStatus

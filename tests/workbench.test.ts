@@ -34,6 +34,11 @@ describe('工作台持久化与安全边界', () => {
     await expect(library.registerFile(outside)).rejects.toThrow('允许范围')
   })
 
+  it('为媒体文件计算 SHA-256，并返回文件元数据', async () => {
+    const asset = db.assets().find(value => value.filename === 'lesson.mp4')!
+    await expect(library.fileHash(asset.id)).resolves.toMatchObject({ algorithm: 'sha256', hash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', size: 0 })
+  })
+
   it('分析结果与处理状态可持久更新', () => {
     const asset = db.assets()[0]
     db.setAnalysis(asset.id, { title: '问路表达', englishTitle: 'Asking for Directions', category: '日常交流', keyTopics: ['directions', 'places'], summary: '练习问路。', confidence: 'high', evidenceNote: '字幕 + 画面' })

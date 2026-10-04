@@ -79,6 +79,7 @@ async function api(request: IncomingMessage, response: ServerResponse, url: URL)
   const stateMatch = request.method === 'POST' && pathname.match(/^\/api\/library\/([^/]+)\/state$/)
   if (stateMatch) { const value = await body<{ state: 'processed' | 'unprocessed' }>(request); if (!['processed', 'unprocessed'].includes(value.state)) throw new Error('处理状态无效'); return json(response, 200, db.setAssetState(stateMatch[1], value.state)) }
   const thumbnailMatch = request.method === 'GET' && pathname.match(/^\/api\/library\/([^/]+)\/thumbnail$/); if (thumbnailMatch) return library.thumbnail(thumbnailMatch[1], response)
+  const hashMatch = request.method === 'GET' && pathname.match(/^\/api\/library\/([^/]+)\/hash$/); if (hashMatch) return json(response, 200, await library.fileHash(hashMatch[1]))
   const mediaMatch = request.method === 'GET' && pathname.match(/^\/api\/library\/([^/]+)\/(media|file)$/); if (mediaMatch) return library.stream(mediaMatch[1], request.headers.range, response, mediaMatch[2] === 'file')
   if (request.method === 'GET' && pathname === '/api/remakes') return json(response, 200, remake.list())
   if (request.method === 'POST' && pathname === '/api/remakes') { const value = await body<{ assetIds: string[]; direction: string; mode: 'editable' | 'render'; budget?: string }>(request); return json(response, 202, remake.start(Array.isArray(value.assetIds) ? value.assetIds : [], String(value.direction || ''), value.mode === 'render' ? 'render' : 'editable', value.budget)) }

@@ -1,5 +1,5 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import type { AnalysisJob, BrowserStatus, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, DownloadJob, DownloadOptions, MediaAsset, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, QuickTimeQuality, RemakeJob, ToolStatus } from '../../shared/types'
+import type { AnalysisJob, BrowserStatus, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, DownloadJob, DownloadOptions, MediaAsset, MediaFileHash, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, QuickTimeQuality, RemakeJob, ToolStatus } from '../../shared/types'
 import { automaticPlatformPublishTimes, filterMediaAssets, mediaAssetDirectory, normalizePublishTopics, type LibraryStateFilter } from '../../shared/core'
 import { api, onEvent, type WorkbenchEvent } from './api'
 import './styles.css'
@@ -479,8 +479,36 @@ function PublishBatchCard({ batch, reload }: { batch: PublishBatch; reload: () =
   </article>
 }
 
-function RemakeTask({ job, reload }: { job: RemakeJob; reload: () => void }) {
+const formatBytes = (value: number) => value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(2)} GB` : value >= 1024 ** 2 ? `${(value / 1024 ** 2).toFixed(1)} MB` : `${Math.round(value / 1024)} KB`
+
+function CompareDialog({ originals, remade, close }: { originals: MediaAsset[]; remade: MediaAsset[]; close: () => void }) {
+  const [originalId, setOriginalId] = useState(originals[0]?.id || ''), [remadeId, setRemadeId] = useState(remade[0]?.id || ''), [hashes, setHashes] = useState<Record<string, MediaFileHash | 'loading' | 'error'>>({}), [playing, setPlaying] = useState(false)
+  const left = useRef<HTMLVideoElement>(null), right = useRef<HTMLVideoElement>(null)
+  const original = originals.find(asset => asset.id === originalId), output = remade.find(asset => asset.id === remadeId)
+  useEffect(() => { for (const id of [originalId, remadeId]) if (id && !hashes[id]) { setHashes(current => ({ ...current, [id]: 'loading' })); void api.library.hash(id).then(value => setHashes(current => ({ ...current, [id]: value }))).catch(() => setHashes(current => ({ ...current, [id]: 'error' }))) } }, [originalId, remadeId, hashes])
+  useEffect(() => { setPlaying(false) }, [originalId, remadeId])
+  const playBoth = async () => { if (!left.current || !right.current) return; right.current.currentTime = Math.min(left.current.currentTime, right.current.duration || left.current.currentTime); const results = await Promise.allSettled([left.current.play(), right.current.play()]); setPlaying(results.some(result => result.status === 'fulfilled')) }
+  const pauseBoth = () => { left.current?.pause(); right.current?.pause(); setPlaying(false) }
+  const resetBoth = () => { pauseBoth(); if (left.current) left.current.currentTime = 0; if (right.current) right.current.currentTime = 0 }
+  const syncRight = () => { if (!left.current || !right.current || !Number.isFinite(right.current.duration)) return; const target = Math.min(left.current.currentTime, right.current.duration); if (Math.abs(right.current.currentTime - target) > .3) right.current.currentTime = target }
+  const hashView = (asset?: MediaAsset) => { const value = asset ? hashes[asset.id] : undefined; return <div className="compare-hash"><span>SHA-256</span><code title={typeof value === 'object' ? value.hash : undefined}>{value === 'loading' || !value ? '计算中…' : value === 'error' ? '计算失败' : value.hash}</code>{typeof value === 'object' ? <small>{formatBytes(value.size)} · 修改于 {new Date(value.modifiedAt).toLocaleString()}</small> : null}</div> }
+  return <div className="modal-bg" role="dialog" aria-modal="true" aria-label="原视频与重新制作视频对比" onMouseDown={close}>
+    <div className="modal compare-modal" onMouseDown={event => event.stopPropagation()}>
+      <div className="modal-head"><h2>视频前后对比</h2><p>使用统一控制同时播放；拖动左侧视频进度时，右侧会同步到相同时间。</p></div>
+      <div className="compare-toolbar"><button className="primary" onClick={() => void (playing ? pauseBoth() : playBoth())}>{playing ? '同时暂停' : '同时播放'}</button><button onClick={resetBoth}>回到开头</button></div>
+      <div className="compare-grid">
+        <section><div className="compare-title"><strong>原视频</strong><select value={originalId} onChange={event => setOriginalId(event.target.value)}>{originals.map(asset => <option value={asset.id} key={asset.id}>{asset.analysis?.title || asset.filename}</option>)}</select></div>{original ? <video ref={left} playsInline src={api.library.mediaUrl(original.id)} onPlay={() => void playBoth()} onPause={pauseBoth} onSeeked={syncRight} onTimeUpdate={syncRight} onEnded={pauseBoth} /> : null}{hashView(original)}</section>
+        <section><div className="compare-title"><strong>重新制作后</strong><select value={remadeId} onChange={event => setRemadeId(event.target.value)}>{remade.map(asset => <option value={asset.id} key={asset.id}>{asset.analysis?.title || asset.filename}</option>)}</select></div>{output ? <video ref={right} playsInline src={api.library.mediaUrl(output.id)} onEnded={pauseBoth} /> : null}{hashView(output)}</section>
+      </div>
+      <div className="modal-foot"><button onClick={close}>关闭</button></div>
+    </div>
+  </div>
+}
+
+function RemakeTask({ job, assets, reload }: { job: RemakeJob; assets: MediaAsset[]; reload: () => void }) {
   const active = ['queued', 'preparing', 'directing', 'building'].includes(job.status)
+  const [comparing, setComparing] = useState(false)
+  const originals = assets.filter(asset => job.assetIds.includes(asset.id)), outputs = assets.filter(asset => job.outputs.includes(asset.file))
   return <article className="task analysis-task">
     <div className="row between"><span className="task-title">{job.assetIds.length} 个视频 · {job.mode === 'render' ? '生成成片' : '可编辑工程'} <span className="data muted">· {job.id.slice(0, 8)}</span></span><span className={`pill ${job.status}`}>{taskNames[job.status] || job.status}</span></div>
     <div className={`progress ${job.status === 'completed' ? 'done' : job.status === 'failed' ? 'bad' : ''}`}><i style={{ width: `${job.progress}%` }} /></div>
@@ -488,11 +516,12 @@ function RemakeTask({ job, reload }: { job: RemakeJob; reload: () => void }) {
     {job.outputs.length ? <p className="notice">已生成 {job.outputs.length} 个成片，并加入媒体库。</p> : null}
     {job.error ? <p className="error">{job.error}</p> : null}
     <details className="analysis-details" open={active}><summary>制作记录（{job.logs.length} 条）</summary><div className="analysis-log" role="log">{job.logs.map((entry, index) => <div className={`analysis-log-line ${entry.level}`} key={`${entry.at}-${index}`}><time>{new Date(entry.at).toLocaleTimeString()}</time><span className="analysis-stage">{analysisStageNames[entry.stage]}</span><span>{entry.message}</span></div>)}</div></details>
-    <div className="row end">{active ? <button onClick={() => void api.remakes.cancel(job.id).then(reload)}>取消</button> : <button className="danger-text" onClick={() => { if (window.confirm('确认删除该 Hypit 任务记录？项目工程与已生成视频会保留。')) void api.remakes.delete(job.id).then(reload) }}>删除历史</button>}</div>
+    <div className="row end">{originals.length && outputs.length ? <button onClick={() => setComparing(true)}>前后对比与哈希</button> : null}{active ? <button onClick={() => void api.remakes.cancel(job.id).then(reload)}>取消</button> : <button className="danger-text" onClick={() => { if (window.confirm('确认删除该 Hypit 任务记录？项目工程与已生成视频会保留。')) void api.remakes.delete(job.id).then(reload) }}>删除历史</button>}</div>
+    {comparing ? <CompareDialog originals={originals} remade={outputs} close={() => setComparing(false)} /> : null}
   </article>
 }
 
-function TasksPage({ analysis, remakes, batches, reload }: { analysis: AnalysisJob[]; remakes: RemakeJob[]; batches: PublishBatch[]; reload: () => void }) {
+function TasksPage({ analysis, remakes, batches, assets, reload }: { analysis: AnalysisJob[]; remakes: RemakeJob[]; batches: PublishBatch[]; assets: MediaAsset[]; reload: () => void }) {
   const [taskTab, setTaskTab] = useState<TaskTab>(() => storedChoice(TASK_TAB_STORAGE_KEY, taskTabs, 'analysis'))
   const historyCount = analysis.filter(job => !['queued', 'preparing', 'analyzing'].includes(job.status)).length
   useEffect(() => { try { window.localStorage.setItem(TASK_TAB_STORAGE_KEY, taskTab) } catch { /* storage unavailable */ } }, [taskTab])
@@ -506,7 +535,7 @@ function TasksPage({ analysis, remakes, batches, reload }: { analysis: AnalysisJ
     {taskTab === 'analysis' ? <>
       <div className="task-history-actions"><span>共 <span className="data">{analysis.length}</span> 条记录，<span className="data">{historyCount}</span> 条已结束</span><button className="danger-text" disabled={!historyCount} onClick={() => { if (window.confirm(`确认清除全部 ${historyCount} 条已结束的分析历史？运行中的任务和媒体库分析结果将保留。`)) void api.analysis.clearHistory().then(reload) }}>清除已结束的历史</button></div>
       <div className="task-list" role="tabpanel">{analysis.length ? analysis.map(job => <AnalysisTask job={job} reload={reload} key={job.id} />) : <div className="empty"><strong>还没有分析任务</strong>在媒体库勾选视频后点击「分析」</div>}</div>
-    </> : taskTab === 'remake' ? <div className="task-list" role="tabpanel">{remakes.length ? remakes.map(job => <RemakeTask job={job} reload={reload} key={job.id} />) : <div className="empty"><strong>还没有重新制作任务</strong>在媒体库选择视频后点击「Hypit 重新制作」</div>}</div> : <div className="task-list" role="tabpanel">{batches.length ? batches.map(batch => <PublishBatchCard batch={batch} reload={reload} key={batch.id} />) : <div className="empty"><strong>还没有发布任务</strong>在媒体库选择已分析的视频后点击「发布到抖音」</div>}</div>}
+    </> : taskTab === 'remake' ? <div className="task-list" role="tabpanel">{remakes.length ? remakes.map(job => <RemakeTask job={job} assets={assets} reload={reload} key={job.id} />) : <div className="empty"><strong>还没有重新制作任务</strong>在媒体库选择视频后点击「重新制作」</div>}</div> : <div className="task-list" role="tabpanel">{batches.length ? batches.map(batch => <PublishBatchCard batch={batch} reload={reload} key={batch.id} />) : <div className="empty"><strong>还没有发布任务</strong>在媒体库选择已分析的视频后点击「发布到抖音」</div>}</div>}
   </section>
 }
 
@@ -599,7 +628,7 @@ function App() {
     <div className={tab === 'library' ? 'content library-content' : 'content'}>
       {tab === 'download' ? <DownloadPage jobs={downloads} setJobs={setDownloads} />
         : tab === 'library' ? <LibraryPage assets={assets} remakes={remakeJobs} reload={loadLibrary} openTasks={taskTab => { try { window.localStorage.setItem(TASK_TAB_STORAGE_KEY, taskTab) } catch { /* storage unavailable */ } setTab('tasks') }} />
-        : tab === 'tasks' ? <TasksPage analysis={analysisJobs} remakes={remakeJobs} batches={batches} reload={loadTasks} />
+        : tab === 'tasks' ? <TasksPage analysis={analysisJobs} remakes={remakeJobs} batches={batches} assets={assets} reload={loadTasks} />
         : <SettingsPage tools={tools} codex={codex} browser={browser} refresh={loadSettings} logout={() => void api.auth.logout().then(() => setAuthenticated(false))} />}
     </div>
     <Toaster />
