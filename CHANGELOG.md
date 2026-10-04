@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.2.0 - 2026-10-04
+
+### Features
+
+- Add Hypit-powered original video remakes for selected media-library videos.
+- Support no-cost editable production planning and explicitly budgeted final rendering.
+- Persist remake projects, progress, logs, interruption state, and completed outputs.
+- Automatically register rendered remake videos back into the media library.
+
+### Documentation
+
+- Document the Hypit remake workflow, project storage, output location, and provider requirements.
+
 ## 1.1.0 - 2026-10-02
 
 ### Features
