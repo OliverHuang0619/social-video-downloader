@@ -17,21 +17,23 @@ import { AnalysisService } from './analysis'
 import { PublisherService } from './publisher'
 import { YoutubeCookieService } from './youtube-cookies'
 import { migrateLegacy } from './migration'
+import { RemakeService } from './remake'
 
 type ServerEvent =
   | { type: 'tools'; event: ToolUpdateEvent }
   | { type: 'creator'; event: ScanEvent }
   | { type: 'downloads'; jobs: ReturnType<DownloadQueue['snapshot']> }
-  | { type: 'library' | 'analysis' | 'publisher' | 'codex'; at: string }
+  | { type: 'library' | 'analysis' | 'remake' | 'publisher' | 'codex'; at: string }
 
 const clients = new Set<ServerResponse>()
 const publish = (event: ServerEvent) => { const data = `data: ${JSON.stringify(event)}\n\n`; for (const client of clients) client.write(data) }
-const changed = (type: 'library' | 'analysis' | 'publisher' | 'codex') => publish({ type, at: new Date().toISOString() })
+const changed = (type: 'library' | 'analysis' | 'remake' | 'publisher' | 'codex') => publish({ type, at: new Date().toISOString() })
 const config = new ConfigStore(), tools = new ToolManager(), media = new MediaService(tools), queue = new DownloadQueue(tools)
 const db = new AppDatabase(), auth = new AuthService(db), library = new LibraryService(db), codex = new CodexService(() => changed('codex'))
 const reportDownloads = (jobs: ReturnType<DownloadQueue['snapshot']>) => { void library.syncDownloads(jobs).then(() => changed('library')); publish({ type: 'downloads', jobs }) }
 queue.setReporter(reportDownloads); queue.hydrate(db.downloads())
 const analysis = new AnalysisService(db, codex, () => changed('analysis')), publisher = new PublisherService(db, () => changed('publisher'))
+const remake = new RemakeService(db, library, codex, () => changed('remake'))
 const youtubeCookies = new YoutubeCookieService()
 const port = Number(process.env.PORT || 3000), host = process.env.HOST || '0.0.0.0'
 const clientDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../client')
@@ -78,6 +80,10 @@ async function api(request: IncomingMessage, response: ServerResponse, url: URL)
   if (stateMatch) { const value = await body<{ state: 'processed' | 'unprocessed' }>(request); if (!['processed', 'unprocessed'].includes(value.state)) throw new Error('处理状态无效'); return json(response, 200, db.setAssetState(stateMatch[1], value.state)) }
   const thumbnailMatch = request.method === 'GET' && pathname.match(/^\/api\/library\/([^/]+)\/thumbnail$/); if (thumbnailMatch) return library.thumbnail(thumbnailMatch[1], response)
   const mediaMatch = request.method === 'GET' && pathname.match(/^\/api\/library\/([^/]+)\/(media|file)$/); if (mediaMatch) return library.stream(mediaMatch[1], request.headers.range, response, mediaMatch[2] === 'file')
+  if (request.method === 'GET' && pathname === '/api/remakes') return json(response, 200, remake.list())
+  if (request.method === 'POST' && pathname === '/api/remakes') { const value = await body<{ assetIds: string[]; direction: string; mode: 'editable' | 'render'; budget?: string }>(request); return json(response, 202, remake.start(Array.isArray(value.assetIds) ? value.assetIds : [], String(value.direction || ''), value.mode === 'render' ? 'render' : 'editable', value.budget)) }
+  const remakeCancel = request.method === 'POST' && pathname.match(/^\/api\/remakes\/([^/]+)\/cancel$/); if (remakeCancel) { remake.cancel(remakeCancel[1]); return json(response, 200, null) }
+  const remakeDelete = request.method === 'DELETE' && pathname.match(/^\/api\/remakes\/([^/]+)$/); if (remakeDelete) { remake.delete(remakeDelete[1]); return json(response, 200, null) }
   if (request.method === 'GET' && pathname === '/api/analysis/jobs') return json(response, 200, db.analyses())
   if (request.method === 'POST' && pathname === '/api/analysis/jobs') { const value = await body<{ assetIds: string[]; force?: boolean }>(request); return json(response, 202, analysis.start(value.assetIds, value.force)) }
   if (request.method === 'DELETE' && pathname === '/api/analysis/jobs') return json(response, 200, { count: analysis.clearHistory() })

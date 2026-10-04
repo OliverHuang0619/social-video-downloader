@@ -6,6 +6,7 @@ export type MediaFormatKind = 'video-audio' | 'video-only' | 'audio-only'
 export type ProcessingState = 'unprocessed' | 'processed'
 export type AnalysisJobStatus = 'queued' | 'preparing' | 'analyzing' | 'completed' | 'failed' | 'cancelled'
 export type PublishJobStatus = 'queued' | 'waiting_local' | 'launching' | 'uploading' | 'scheduling' | 'waiting_covers' | 'submitting' | 'published' | 'scheduled' | 'failed' | 'needs_login' | 'needs_attention' | 'interrupted' | 'cancelled'
+export type RemakeJobStatus = 'queued' | 'preparing' | 'directing' | 'building' | 'completed' | 'failed' | 'cancelled'
 
 export interface MediaFormat {
   id: string
@@ -110,6 +111,23 @@ export interface AnalysisJob {
   currentItem?: string
   processedItems: number
   totalItems: number
+  logs: AnalysisLogEntry[]
+  error?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface RemakeJob {
+  id: string
+  status: RemakeJobStatus
+  assetIds: string[]
+  mode: 'editable' | 'render'
+  direction: string
+  budget?: string
+  progress: number
+  message: string
+  projectDir: string
+  outputs: string[]
   logs: AnalysisLogEntry[]
   error?: string
   createdAt: string

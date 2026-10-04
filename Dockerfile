@@ -15,6 +15,7 @@ ENV NODE_ENV=production \
     SVD_IMPORT_DIR=/imports \
     SVD_COOKIES_FILE=/config/cookies.txt \
     SVD_SKILL_DIR=/app/skills/english-video-catalog \
+    SVD_HYPIT_SKILL_FILE=/usr/local/lib/node_modules/@hypit/hypit/skills/hypit/SKILL.md \
     SVD_BROWSER_CDP=http://browser:9222 \
     SVD_BROWSER_VNC=http://browser:6080
 RUN apt-get -o Acquire::Retries=3 update \
@@ -24,6 +25,7 @@ RUN apt-get -o Acquire::Retries=3 update \
     && ln -s /opt/media-tools/bin/yt-dlp /usr/local/bin/yt-dlp \
     && ln -s /opt/media-tools/bin/gallery-dl /usr/local/bin/gallery-dl \
     && npm install -g @openai/codex@0.130.0 \
+    && npm install -g @hypit/hypit@0.2.16 \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /app/dist /downloads /imports /config \
     && chown -R node:node /app /downloads /config

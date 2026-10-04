@@ -47,7 +47,7 @@ export class LibraryService {
     if (!unique.length) throw new Error('请选择要删除的视频')
     const assets = unique.map(id => this.db.asset(id)).filter((asset): asset is MediaAsset => Boolean(asset))
     const busy = this.db.busyAssetIds(assets.map(asset => asset.id))
-    if (busy.size) throw new Error(`${busy.size} 个视频正在分析或发布中，请先取消相关任务`)
+    if (busy.size) throw new Error(`${busy.size} 个视频正在分析或发布中，或正在由 Hypit 重新制作，请先取消相关任务`)
     const count = this.db.deleteAssets(assets.map(asset => asset.id))
     const thumbnails = path.join(process.env.SVD_CONFIG_DIR || '/config', 'thumbnails')
     let deletedFiles = 0; const failed: string[] = []

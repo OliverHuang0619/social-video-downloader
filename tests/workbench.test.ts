@@ -6,6 +6,7 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import type { AppDatabase as DatabaseType } from '../src/server/db'
 import type { AuthService as AuthType } from '../src/server/auth'
 import type { LibraryService as LibraryType } from '../src/server/library'
+import type { RemakeJob } from '../src/shared/types'
 
 const root = mkdtempSync(path.join(tmpdir(), 'svw-test-'))
 const config = path.join(root, 'config'), downloads = path.join(root, 'downloads'), imports = path.join(root, 'imports')
@@ -87,6 +88,16 @@ describe('工作台持久化与安全边界', () => {
     expect(existsSync(keep)).toBe(true)
     expect(db.asset(busy.id)).toBeTruthy()
     db.updateAnalysis('analysis-busy', { status: 'cancelled' })
+  })
+
+  it('Hypit 重新制作任务可持久化，运行中记录不能删除', () => {
+    const now = new Date().toISOString(), asset = db.assets()[0]
+    const job: RemakeJob = { id: 'remake-persisted', status: 'directing', assetIds: [asset.id], mode: 'editable', direction: '重新设计脚本、画面与声音，制作原创版本', progress: 30, message: '导演中', projectDir: path.join(config, 'hypit-projects/remake-persisted'), outputs: [], logs: [], createdAt: now, updatedAt: now }
+    db.saveRemake(job)
+    expect(db.remake(job.id)).toMatchObject({ mode: 'editable', assetIds: [asset.id], progress: 30 })
+    expect(db.deleteRemake(job.id)).toBe(false)
+    db.saveRemake({ ...job, status: 'completed', progress: 100, updatedAt: new Date().toISOString() })
+    expect(db.deleteRemake(job.id)).toBe(true)
   })
 
   it('抖音发布成功时立即把媒体标记为已处理', async () => {

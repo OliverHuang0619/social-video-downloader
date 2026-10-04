@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import type { AnalysisJob, AnalysisResult, DownloadJob, MediaAsset, PublishBatch, PublishJob } from '../shared/types'
+import type { AnalysisJob, AnalysisResult, DownloadJob, MediaAsset, PublishBatch, PublishJob, RemakeJob } from '../shared/types'
 
 const configDir = process.env.SVD_CONFIG_DIR || path.join(process.cwd(), 'config')
 mkdirSync(configDir, { recursive: true })
@@ -38,6 +38,7 @@ export class AppDatabase {
         status TEXT NOT NULL, error TEXT, screenshot TEXT
       );
       CREATE TABLE IF NOT EXISTS download_jobs (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS remake_jobs (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, event TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL);
     `)
     const analysisColumns = new Set((this.sqlite.prepare('PRAGMA table_info(analysis_jobs)').all() as { name: string }[]).map(column => column.name))
@@ -57,6 +58,10 @@ export class AppDatabase {
     for (const row of interruptedDownloads) {
       const job = JSON.parse(row.payload) as DownloadJob
       if (['queued', 'downloading'].includes(job.status)) { job.status = 'failed'; job.error = '服务重启，原下载任务已中断'; job.detail = undefined; this.saveDownload(job) }
+    }
+    for (const row of this.sqlite.prepare('SELECT id,payload FROM remake_jobs').all() as { id: string; payload: string }[]) {
+      const job = JSON.parse(row.payload) as RemakeJob
+      if (['queued', 'preparing', 'directing', 'building'].includes(job.status)) { job.status = 'failed'; job.error = '服务重启，原 Hypit 任务已中断；工程文件已保留'; job.message = '任务已中断'; this.saveRemake(job) }
     }
   }
 
@@ -99,6 +104,10 @@ export class AppDatabase {
     const wanted = new Set(ids), busy = new Set<string>()
     for (const row of this.sqlite.prepare("SELECT asset_ids FROM analysis_jobs WHERE status IN ('queued','preparing','analyzing')").all() as { asset_ids: string }[]) for (const id of JSON.parse(row.asset_ids) as string[]) if (wanted.has(id)) busy.add(id)
     for (const row of this.sqlite.prepare("SELECT asset_id FROM publish_jobs WHERE status IN ('queued','waiting_local','launching','uploading','scheduling','waiting_covers','submitting')").all() as { asset_id: string }[]) if (wanted.has(row.asset_id)) busy.add(row.asset_id)
+    for (const row of this.sqlite.prepare('SELECT payload FROM remake_jobs').all() as { payload: string }[]) {
+      const job = JSON.parse(row.payload) as RemakeJob
+      if (['queued', 'preparing', 'directing', 'building'].includes(job.status)) for (const id of job.assetIds) if (wanted.has(id)) busy.add(id)
+    }
     return busy
   }
   /** Removes assets together with their publish history; batches left empty are removed too. */
@@ -117,6 +126,11 @@ export class AppDatabase {
 
   saveDownload(job: DownloadJob) { this.sqlite.prepare('INSERT INTO download_jobs(id,payload,updated_at) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at').run(job.id, JSON.stringify(job), new Date().toISOString()) }
   downloads() { return (this.sqlite.prepare('SELECT payload FROM download_jobs ORDER BY updated_at DESC').all() as { payload: string }[]).map(row => JSON.parse(row.payload) as DownloadJob) }
+
+  saveRemake(job: RemakeJob) { this.sqlite.prepare('INSERT INTO remake_jobs(id,payload,updated_at) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at').run(job.id, JSON.stringify(job), job.updatedAt) }
+  remake(id: string) { const row = this.sqlite.prepare('SELECT payload FROM remake_jobs WHERE id=?').get(id) as { payload: string } | undefined; return row ? JSON.parse(row.payload) as RemakeJob : undefined }
+  remakes() { return (this.sqlite.prepare('SELECT payload FROM remake_jobs ORDER BY updated_at DESC').all() as { payload: string }[]).map(row => JSON.parse(row.payload) as RemakeJob) }
+  deleteRemake(id: string) { const job = this.remake(id); if (!job || ['queued', 'preparing', 'directing', 'building'].includes(job.status)) return false; return this.sqlite.prepare('DELETE FROM remake_jobs WHERE id=?').run(id).changes > 0 }
 
   createAnalysis(job: AnalysisJob, outputDir: string) { this.sqlite.prepare('INSERT INTO analysis_jobs(id,status,asset_ids,progress,message,error,output_dir,created_at,updated_at,detail_json) VALUES(?,?,?,?,?,?,?,?,?,?)').run(job.id, job.status, JSON.stringify(job.assetIds), job.progress, job.message, job.error || null, outputDir, job.createdAt, job.updatedAt, JSON.stringify({ currentItem: job.currentItem, processedItems: job.processedItems, totalItems: job.totalItems, logs: job.logs })) }
   updateAnalysis(id: string, values: Partial<Pick<AnalysisJob, 'status' | 'progress' | 'message' | 'error' | 'currentItem' | 'processedItems' | 'totalItems' | 'logs'>>) {

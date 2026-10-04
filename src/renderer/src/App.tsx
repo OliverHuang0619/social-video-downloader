@@ -1,5 +1,5 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import type { AnalysisJob, BrowserStatus, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, DownloadJob, DownloadOptions, MediaAsset, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, QuickTimeQuality, ToolStatus } from '../../shared/types'
+import type { AnalysisJob, BrowserStatus, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, DownloadJob, DownloadOptions, MediaAsset, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, QuickTimeQuality, RemakeJob, ToolStatus } from '../../shared/types'
 import { automaticPlatformPublishTimes, filterMediaAssets, mediaAssetDirectory, normalizePublishTopics, type LibraryStateFilter } from '../../shared/core'
 import { api, onEvent, type WorkbenchEvent } from './api'
 import './styles.css'
@@ -7,11 +7,11 @@ import './task-tabs.css'
 import './compact-library.css'
 
 type Tab = 'download' | 'library' | 'tasks' | 'settings'
-type TaskTab = 'analysis' | 'publisher'
+type TaskTab = 'analysis' | 'remake' | 'publisher'
 const NAVIGATION_STORAGE_KEY = 'social-video-workbench:navigation:v1'
 const TASK_TAB_STORAGE_KEY = 'social-video-workbench:task-tab:v1'
 const tabs = new Set<Tab>(['download', 'library', 'tasks', 'settings'])
-const taskTabs = new Set<TaskTab>(['analysis', 'publisher'])
+const taskTabs = new Set<TaskTab>(['analysis', 'remake', 'publisher'])
 function storedChoice<T extends string>(key: string, allowed: Set<T>, fallback: T) {
   try { const value = window.localStorage.getItem(key) as T | null; return value && allowed.has(value) ? value : fallback } catch { return fallback }
 }
@@ -25,7 +25,7 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : S
 const formatDuration = (value?: number) => value ? `${Math.floor(value / 60)}:${String(Math.floor(value % 60)).padStart(2, '0')}` : '—'
 const formatGroups: Record<MediaFormatKind, string> = { 'video-audio': '视频与音频', 'video-only': '仅视频', 'audio-only': '仅音频' }
 const formatLabel = (format: MediaFormat) => `${format.height ? `${format.height}p` : format.bitrate ? `${Math.round(format.bitrate)}kbps` : '音频'} · ${format.ext.toUpperCase()}${format.quickTimeCompatible ? ' · QuickTime' : ''}`
-const taskNames: Record<string, string> = { queued: '等待中', downloading: '下载中', skipped: '已跳过', preparing: '准备媒体', analyzing: '分析中', completed: '已完成', failed: '失败', cancelled: '已取消', waiting_local: '本地等待', running: '执行中', launching: '启动浏览器', uploading: '上传中', scheduling: '设置排期', waiting_covers: '等待横竖封面', submitting: '提交中', published: '已发布', scheduled: '已排期', needs_login: '需要登录', needs_attention: '需要检查', interrupted: '已中断', partial: '部分完成' }
+const taskNames: Record<string, string> = { queued: '等待中', downloading: '下载中', skipped: '已跳过', preparing: '准备媒体', analyzing: '分析中', directing: '创意制作中', building: '生成成片中', completed: '已完成', failed: '失败', cancelled: '已取消', waiting_local: '本地等待', running: '执行中', launching: '启动浏览器', uploading: '上传中', scheduling: '设置排期', waiting_covers: '等待横竖封面', submitting: '提交中', published: '已发布', scheduled: '已排期', needs_login: '需要登录', needs_attention: '需要检查', interrupted: '已中断', partial: '部分完成' }
 const confidenceNames: Record<string, string> = { high: '高', medium: '中', low: '低' }
 const stateNames: Record<LibraryStateFilter, string> = { unprocessed: '未处理', processed: '已处理', 'awaiting-analysis': '等待分析', all: '全部' }
 const stateOrder: LibraryStateFilter[] = ['unprocessed', 'processed', 'awaiting-analysis', 'all']
@@ -269,6 +269,32 @@ function PublishDialog({ assets, close, done }: { assets: MediaAsset[]; close: (
 
 /* -------------------------------------------------------------- library */
 
+function RemakeDialog({ assets, close, done }: { assets: MediaAsset[]; close: () => void; done: () => void }) {
+  const [direction, setDirection] = useState('保留核心信息与吸引人的节奏，重新设计脚本、画面、声音与包装，制作面向短视频平台的原创版本。')
+  const [mode, setMode] = useState<RemakeJob['mode']>('editable'), [budget, setBudget] = useState(''), [busy, setBusy] = useState(false), [message, setMessage] = useState('')
+  const submit = async () => {
+    if (direction.trim().length < 6) return setMessage('请补充原创改编方向')
+    if (mode === 'render' && !budget.trim()) return setMessage('生成成片前，请填写可接受的预算或免费额度范围')
+    setBusy(true); setMessage('')
+    try { await api.remakes.start(assets.map(asset => asset.id), direction, mode, budget); toast(`已创建 ${assets.length} 个视频的 Hypit 重新制作任务`); done() }
+    catch (error) { setMessage(errorText(error)); setBusy(false) }
+  }
+  return <div className="modal-bg" role="dialog" aria-modal="true" aria-label="使用 Hypit 重新制作" onMouseDown={() => { if (!busy) close() }}>
+    <div className="modal remake-modal" onMouseDown={event => event.stopPropagation()}>
+      <div className="modal-head"><h2>使用 Hypit 重新制作</h2><p>{assets.length} 个参考视频将分别建立原创制作工程，原文件不会被覆盖。</p></div>
+      <label>原创改编方向<textarea rows={5} value={direction} onChange={event => setDirection(event.target.value)} placeholder="例如：改成轻松幽默的英文启蒙短片，重写旁白，使用全新的角色、场景与配乐…" /></label>
+      <fieldset><legend>制作范围</legend>
+        <label className="check"><input type="radio" name="remake-mode" checked={mode === 'editable'} onChange={() => setMode('editable')} />先完成原创方案与可编辑工程（不使用付费生成）</label>
+        <label className="check"><input type="radio" name="remake-mode" checked={mode === 'render'} onChange={() => setMode('render')} />使用已配置的 Hypit 服务生成并检查成片</label>
+      </fieldset>
+      {mode === 'render' ? <label>费用授权<input value={budget} onChange={event => setBudget(event.target.value)} placeholder="例如：本批最多 ¥50；或仅使用账户免费额度" /></label> : null}
+      <p className="warning">重新制作会重构脚本、视觉、声音和节奏，不会采用镜像、变速、裁剪等伪原创手段；平台是否认定原创仍由平台规则与实际作品决定。</p>
+      {message ? <p className="error">{message}</p> : null}
+      <div className="modal-foot"><button disabled={busy} onClick={close}>取消</button><button className="primary" disabled={busy} onClick={() => void submit()}>{busy ? '正在创建…' : mode === 'render' ? '开始制作成片' : '创建原创工程'}</button></div>
+    </div>
+  </div>
+}
+
 function DeleteDialog({ assets, close, done }: { assets: MediaAsset[]; close: () => void; done: () => void }) {
   const [deleteFiles, setDeleteFiles] = useState(true), [busy, setBusy] = useState(false), [message, setMessage] = useState('')
   const published = assets.filter(asset => asset.processingState === 'processed').length
@@ -337,7 +363,7 @@ const AssetCard = memo(function AssetCard({ asset, selected, toggle, play, mark,
 })
 
 function LibraryPage({ assets, reload, openTasks }: { assets: MediaAsset[]; reload: () => void; openTasks: (taskTab: TaskTab) => void }) {
-  const [selected, setSelected] = useState<Set<string>>(new Set()), [queryInput, setQueryInput] = useState(''), [state, setState] = useState<LibraryStateFilter>('unprocessed'), [category, setCategory] = useState('all'), [directory, setDirectory] = useState('all'), [playing, setPlaying] = useState<MediaAsset>(), [publishing, setPublishing] = useState<MediaAsset[]>(), [deleting, setDeleting] = useState<MediaAsset[]>(), [importOpen, setImportOpen] = useState(false), [importPath, setImportPath] = useState('/downloads'), [importing, setImporting] = useState(false), [message, setMessage] = useState('')
+  const [selected, setSelected] = useState<Set<string>>(new Set()), [queryInput, setQueryInput] = useState(''), [state, setState] = useState<LibraryStateFilter>('unprocessed'), [category, setCategory] = useState('all'), [directory, setDirectory] = useState('all'), [playing, setPlaying] = useState<MediaAsset>(), [publishing, setPublishing] = useState<MediaAsset[]>(), [remaking, setRemaking] = useState<MediaAsset[]>(), [deleting, setDeleting] = useState<MediaAsset[]>(), [importOpen, setImportOpen] = useState(false), [importPath, setImportPath] = useState('/downloads'), [importing, setImporting] = useState(false), [message, setMessage] = useState('')
   const query = useDeferredValue(queryInput.trim())
   const categories = useMemo(() => [...new Set(assets.map(asset => asset.analysis?.category).filter(Boolean) as string[])].sort(), [assets])
   const directories = useMemo(() => [...new Set(assets.map(asset => mediaAssetDirectory(asset.file)))].sort(), [assets])
@@ -386,6 +412,7 @@ function LibraryPage({ assets, reload, openTasks }: { assets: MediaAsset[]; relo
         <button className="danger-text" disabled={!chosen.length} onClick={() => setDeleting(chosen)}>删除</button>
         <button disabled={!chosen.length} onClick={() => void analyze()}>分析</button>
         <button disabled={!chosen.some(asset => asset.analysis)} onClick={() => void analyze(true)}>重新分析</button>
+        <button disabled={!chosen.length} onClick={() => setRemaking(chosen)}>Hypit 重新制作{chosen.length > 1 ? ` (${chosen.length})` : ''}</button>
         <button className="primary" disabled={!chosen.length || chosen.some(asset => !asset.analysis)} title={chosen.some(asset => !asset.analysis) ? '所选视频需要先完成分析' : undefined} onClick={() => setPublishing(chosen)}>发布到抖音{chosen.length > 1 ? ` (${chosen.length})` : ''}</button>
       </div>
     </section>
@@ -394,6 +421,7 @@ function LibraryPage({ assets, reload, openTasks }: { assets: MediaAsset[]; relo
       : <section className="panel"><div className="empty">{assets.length ? <><strong>没有符合条件的视频</strong>试试切换状态、分类或目录，或清空搜索词</> : <><strong>媒体库是空的</strong>完成下载后视频会自动出现，也可以点击「导入目录」登记服务器上的文件</>}</div></section>}
     {playing ? <div className="modal-bg" role="dialog" aria-modal="true" aria-label="视频播放" onMouseDown={() => setPlaying(undefined)}><div className="modal player" onMouseDown={event => event.stopPropagation()}><button className="player-close" aria-label="关闭播放" title="关闭 (Esc)" onClick={() => setPlaying(undefined)}>×</button><h2>{playing.analysis?.title || playing.filename}</h2><video controls autoPlay src={api.library.mediaUrl(playing.id)} /><p className="filename">{playing.filename}</p></div></div> : null}
     {publishing ? <PublishDialog assets={publishing} close={() => setPublishing(undefined)} done={() => { setPublishing(undefined); openTasks('publisher') }} /> : null}
+    {remaking ? <RemakeDialog assets={remaking} close={() => setRemaking(undefined)} done={() => { setRemaking(undefined); openTasks('remake') }} /> : null}
     {deleting ? <DeleteDialog assets={deleting} close={() => setDeleting(undefined)} done={() => { setDeleting(undefined); setSelected(new Set()); reload() }} /> : null}
   </div>
 }
@@ -443,20 +471,34 @@ function PublishBatchCard({ batch, reload }: { batch: PublishBatch; reload: () =
   </article>
 }
 
-function TasksPage({ analysis, batches, reload }: { analysis: AnalysisJob[]; batches: PublishBatch[]; reload: () => void }) {
+function RemakeTask({ job, reload }: { job: RemakeJob; reload: () => void }) {
+  const active = ['queued', 'preparing', 'directing', 'building'].includes(job.status)
+  return <article className="task analysis-task">
+    <div className="row between"><span className="task-title">{job.assetIds.length} 个视频 · {job.mode === 'render' ? '生成成片' : '可编辑工程'} <span className="data muted">· {job.id.slice(0, 8)}</span></span><span className={`pill ${job.status}`}>{taskNames[job.status] || job.status}</span></div>
+    <div className={`progress ${job.status === 'completed' ? 'done' : job.status === 'failed' ? 'bad' : ''}`}><i style={{ width: `${job.progress}%` }} /></div>
+    <p>{job.message}</p><p className="muted">{job.direction}</p>
+    {job.outputs.length ? <p className="notice">已生成 {job.outputs.length} 个成片，并加入媒体库。</p> : null}
+    {job.error ? <p className="error">{job.error}</p> : null}
+    <details className="analysis-details" open={active}><summary>制作记录（{job.logs.length} 条）</summary><div className="analysis-log" role="log">{job.logs.map((entry, index) => <div className={`analysis-log-line ${entry.level}`} key={`${entry.at}-${index}`}><time>{new Date(entry.at).toLocaleTimeString()}</time><span>{entry.message}</span></div>)}</div></details>
+    <div className="row end">{active ? <button onClick={() => void api.remakes.cancel(job.id).then(reload)}>取消</button> : <button className="danger-text" onClick={() => { if (window.confirm('确认删除该 Hypit 任务记录？项目工程与已生成视频会保留。')) void api.remakes.delete(job.id).then(reload) }}>删除历史</button>}</div>
+  </article>
+}
+
+function TasksPage({ analysis, remakes, batches, reload }: { analysis: AnalysisJob[]; remakes: RemakeJob[]; batches: PublishBatch[]; reload: () => void }) {
   const [taskTab, setTaskTab] = useState<TaskTab>(() => storedChoice(TASK_TAB_STORAGE_KEY, taskTabs, 'analysis'))
   const historyCount = analysis.filter(job => !['queued', 'preparing', 'analyzing'].includes(job.status)).length
   useEffect(() => { try { window.localStorage.setItem(TASK_TAB_STORAGE_KEY, taskTab) } catch { /* storage unavailable */ } }, [taskTab])
   return <section className="panel task-panel">
     <div className="task-tabs" role="tablist" aria-label="任务类型">
       <button role="tab" aria-selected={taskTab === 'analysis'} className={taskTab === 'analysis' ? 'active' : ''} onClick={() => setTaskTab('analysis')}><strong>分析任务</strong><span>Codex 逐个执行</span><em>{analysis.length}</em></button>
+      <button role="tab" aria-selected={taskTab === 'remake'} className={taskTab === 'remake' ? 'active' : ''} onClick={() => setTaskTab('remake')}><strong>Hypit 重新制作</strong><span>原创方案、工程与成片</span><em>{remakes.length}</em></button>
       <button role="tab" aria-selected={taskTab === 'publisher'} className={taskTab === 'publisher' ? 'active' : ''} onClick={() => setTaskTab('publisher')}><strong>抖音发布任务</strong><span>共用一个浏览器串行提交</span><em>{batches.length}</em></button>
       {taskTab === 'publisher' ? <a target="_blank" rel="noreferrer" href="https://creator.douyin.com/creator-micro/content/manage">在抖音查看作品管理 ↗</a> : null}
     </div>
     {taskTab === 'analysis' ? <>
       <div className="task-history-actions"><span>共 <span className="data">{analysis.length}</span> 条记录，<span className="data">{historyCount}</span> 条已结束</span><button className="danger-text" disabled={!historyCount} onClick={() => { if (window.confirm(`确认清除全部 ${historyCount} 条已结束的分析历史？运行中的任务和媒体库分析结果将保留。`)) void api.analysis.clearHistory().then(reload) }}>清除已结束的历史</button></div>
       <div className="task-list" role="tabpanel">{analysis.length ? analysis.map(job => <AnalysisTask job={job} reload={reload} key={job.id} />) : <div className="empty"><strong>还没有分析任务</strong>在媒体库勾选视频后点击「分析」</div>}</div>
-    </> : <div className="task-list" role="tabpanel">{batches.length ? batches.map(batch => <PublishBatchCard batch={batch} reload={reload} key={batch.id} />) : <div className="empty"><strong>还没有发布任务</strong>在媒体库选择已分析的视频后点击「发布到抖音」</div>}</div>}
+    </> : taskTab === 'remake' ? <div className="task-list" role="tabpanel">{remakes.length ? remakes.map(job => <RemakeTask job={job} reload={reload} key={job.id} />) : <div className="empty"><strong>还没有重新制作任务</strong>在媒体库选择视频后点击「Hypit 重新制作」</div>}</div> : <div className="task-list" role="tabpanel">{batches.length ? batches.map(batch => <PublishBatchCard batch={batch} reload={reload} key={batch.id} />) : <div className="empty"><strong>还没有发布任务</strong>在媒体库选择已分析的视频后点击「发布到抖音」</div>}</div>}
   </section>
 }
 
@@ -518,20 +560,20 @@ function SettingsPage({ tools, codex, browser, refresh, logout }: { tools: ToolS
 /* ------------------------------------------------------------------ app */
 
 function App() {
-  const [authenticated, setAuthenticated] = useState<boolean | null>(null), [tab, setTab] = useState<Tab>(() => storedChoice(NAVIGATION_STORAGE_KEY, tabs, 'download')), [assets, setAssets] = useState<MediaAsset[]>([]), [analysisJobs, setAnalysisJobs] = useState<AnalysisJob[]>([]), [batches, setBatches] = useState<PublishBatch[]>([]), [downloads, setDownloads] = useState<DownloadJob[]>([]), [tools, setTools] = useState<ToolStatus | null>(null), [codex, setCodex] = useState<CodexStatus | null>(null), [browser, setBrowser] = useState<BrowserStatus | null>(null)
+  const [authenticated, setAuthenticated] = useState<boolean | null>(null), [tab, setTab] = useState<Tab>(() => storedChoice(NAVIGATION_STORAGE_KEY, tabs, 'download')), [assets, setAssets] = useState<MediaAsset[]>([]), [analysisJobs, setAnalysisJobs] = useState<AnalysisJob[]>([]), [remakeJobs, setRemakeJobs] = useState<RemakeJob[]>([]), [batches, setBatches] = useState<PublishBatch[]>([]), [downloads, setDownloads] = useState<DownloadJob[]>([]), [tools, setTools] = useState<ToolStatus | null>(null), [codex, setCodex] = useState<CodexStatus | null>(null), [browser, setBrowser] = useState<BrowserStatus | null>(null)
   const loadLibrary = useCallback(() => { void api.library.list().then(setAssets) }, [])
-  const loadTasks = useCallback(() => { void Promise.all([api.analysis.list(), api.publisher.jobs()]).then(([a, p]) => { setAnalysisJobs(a); setBatches(p) }) }, [])
+  const loadTasks = useCallback(() => { void Promise.all([api.analysis.list(), api.remakes.list(), api.publisher.jobs()]).then(([a, r, p]) => { setAnalysisJobs(a); setRemakeJobs(r); setBatches(p) }) }, [])
   const loadSettings = useCallback(() => { void Promise.all([api.tools.status(), api.codex.status(), api.publisher.status()]).then(([t, c, b]) => { setTools(t); setCodex(c); setBrowser(b) }) }, [])
   useEffect(() => { void api.auth.session().then(value => setAuthenticated(value.authenticated)).catch(() => setAuthenticated(false)) }, [])
   useEffect(() => { try { window.localStorage.setItem(NAVIGATION_STORAGE_KEY, tab) } catch { /* storage unavailable */ } }, [tab])
-  useEffect(() => { if (!authenticated) return; loadLibrary(); loadTasks(); loadSettings(); return onEvent(raw => { const event = raw as WorkbenchEvent; if (event.type === 'library') loadLibrary(); if (event.type === 'analysis' || event.type === 'publisher') { loadLibrary(); loadTasks() } if (event.type === 'codex') loadSettings() }) }, [authenticated, loadLibrary, loadSettings, loadTasks])
+  useEffect(() => { if (!authenticated) return; loadLibrary(); loadTasks(); loadSettings(); return onEvent(raw => { const event = raw as WorkbenchEvent; if (event.type === 'library') loadLibrary(); if (event.type === 'analysis' || event.type === 'remake' || event.type === 'publisher') { loadLibrary(); loadTasks() } if (event.type === 'codex') loadSettings() }) }, [authenticated, loadLibrary, loadSettings, loadTasks])
   useEffect(() => { if (!authenticated) return; void api.downloads.list().then(setDownloads); return onEvent(raw => { const event = raw as WorkbenchEvent; if (event.type === 'downloads') setDownloads(event.jobs) }) }, [authenticated])
 
   const activeDownloads = downloads.filter(job => ['queued', 'downloading'].includes(job.status)).length
   const unprocessed = useMemo(() => filterMediaAssets(assets, 'unprocessed', 'all', '').length, [assets])
   const awaiting = useMemo(() => assets.filter(asset => !asset.analysis).length, [assets])
-  const runningTasks = analysisJobs.filter(job => ['queued', 'preparing', 'analyzing'].includes(job.status)).length + batches.filter(batch => ['queued', 'waiting_local', 'running'].includes(batch.status)).length
-  const attention = [...analysisJobs, ...batches].some(item => ['failed', 'needs_attention', 'interrupted'].includes(item.status))
+  const runningTasks = analysisJobs.filter(job => ['queued', 'preparing', 'analyzing'].includes(job.status)).length + remakeJobs.filter(job => ['queued', 'preparing', 'directing', 'building'].includes(job.status)).length + batches.filter(batch => ['queued', 'waiting_local', 'running'].includes(batch.status)).length
+  const attention = [...analysisJobs, ...remakeJobs, ...batches].some(item => ['failed', 'needs_attention', 'interrupted'].includes(item.status))
   const stages: Array<{ id: Tab; label: string; status: string; tone?: 'live' | 'alert' }> = [
     { id: 'download', label: '下载', status: activeDownloads ? `${activeDownloads} 下载中` : '空闲', tone: activeDownloads ? 'live' : undefined },
     { id: 'library', label: '媒体库', status: unprocessed ? `${unprocessed} 待审核` : awaiting ? `${awaiting} 待分析` : `${assets.length} 个视频` },
@@ -549,7 +591,7 @@ function App() {
     <div className={tab === 'library' ? 'content library-content' : 'content'}>
       {tab === 'download' ? <DownloadPage jobs={downloads} setJobs={setDownloads} />
         : tab === 'library' ? <LibraryPage assets={assets} reload={loadLibrary} openTasks={taskTab => { try { window.localStorage.setItem(TASK_TAB_STORAGE_KEY, taskTab) } catch { /* storage unavailable */ } setTab('tasks') }} />
-        : tab === 'tasks' ? <TasksPage analysis={analysisJobs} batches={batches} reload={loadTasks} />
+        : tab === 'tasks' ? <TasksPage analysis={analysisJobs} remakes={remakeJobs} batches={batches} reload={loadTasks} />
         : <SettingsPage tools={tools} codex={codex} browser={browser} refresh={loadSettings} logout={() => void api.auth.logout().then(() => setAuthenticated(false))} />}
     </div>
     <Toaster />
