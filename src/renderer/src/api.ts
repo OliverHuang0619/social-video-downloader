@@ -1,4 +1,4 @@
-import type { AnalysisJob, AuthStatus, BrowserStatus, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, DownloadJob, MediaAsset, MediaFileHash, MediaFileMetadata, PublishBatch, RemakeJob, ScanEvent, ToolStatus, ToolUpdateEvent } from '../../shared/types'
+import type { AnalysisJob, AuthStatus, BrowserStatus, CodexConnectionPublic, CodexConnectionTestResult, CodexProviderPublic, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, DownloadJob, MediaAsset, MediaFileHash, MediaFileMetadata, PublishBatch, RemakeJob, ScanEvent, ToolStatus, ToolUpdateEvent } from '../../shared/types'
 
 let csrfToken = ''
 let events: EventSource | undefined
@@ -43,7 +43,18 @@ export const api = {
   },
   analysis: { list: () => request<AnalysisJob[]>('/api/analysis/jobs'), start: (assetIds: string[], force = false) => post<AnalysisJob>('/api/analysis/jobs', { assetIds, force }), cancel: (id: string) => post<void>(`/api/analysis/jobs/${id}/cancel`), retry: (id: string) => post<AnalysisJob>(`/api/analysis/jobs/${id}/retry`), delete: (id: string) => request<void>(`/api/analysis/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' }), clearHistory: () => request<{ count: number }>('/api/analysis/jobs', { method: 'DELETE' }) },
   remakes: { list: () => request<RemakeJob[]>('/api/remakes'), start: (assetIds: string[], direction: string, mode: RemakeJob['mode'], budget?: string) => post<RemakeJob>('/api/remakes', { assetIds, direction, mode, budget }), cancel: (id: string) => post<void>(`/api/remakes/${encodeURIComponent(id)}/cancel`), delete: (id: string) => request<void>(`/api/remakes/${encodeURIComponent(id)}`, { method: 'DELETE' }) },
-  codex: { status: () => request<CodexStatus>('/api/codex/status'), login: () => post<CodexStatus>('/api/codex/login'), cancel: () => post<CodexStatus>('/api/codex/login/cancel'), logout: () => post<CodexStatus>('/api/codex/logout') },
+  codex: {
+    status: () => request<CodexStatus>('/api/codex/status'),
+    login: () => post<CodexStatus>('/api/codex/login'),
+    cancel: () => post<CodexStatus>('/api/codex/login/cancel'),
+    logout: () => post<CodexStatus>('/api/codex/logout'),
+    connection: () => request<CodexConnectionPublic>('/api/codex/connection'),
+    updateConnection: (value: Partial<CodexConnectionPublic>) => request<CodexConnectionPublic>('/api/codex/connection', { method: 'PUT', body: JSON.stringify(value) }),
+    createProvider: (value: Record<string, unknown>) => post<CodexProviderPublic>('/api/codex/providers', value),
+    updateProvider: (id: string, value: Record<string, unknown>) => request<CodexProviderPublic>(`/api/codex/providers/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(value) }),
+    deleteProvider: (id: string) => request<CodexConnectionPublic>(`/api/codex/providers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    testConnection: (value: { mode?: CodexConnectionPublic['mode']; providerId?: string } = {}) => post<CodexConnectionTestResult>('/api/codex/connection/test', value),
+  },
   publisher: { status: () => request<BrowserStatus>('/api/publisher/status'), login: () => post<BrowserStatus>('/api/publisher/login'), jobs: () => request<PublishBatch[]>('/api/publisher/jobs'), publish: (value: unknown) => post<PublishBatch>('/api/publisher/publish', value), retry: (id: string) => post<void>(`/api/publisher/jobs/${id}/retry`), cancelBatch: (id: string) => post<void>(`/api/publisher/batches/${id}/cancel`), deleteBatch: (id: string) => request<void>(`/api/publisher/batches/${id}`, { method: 'DELETE' }) },
 }
 

@@ -93,6 +93,27 @@ async function api(request: IncomingMessage, response: ServerResponse, url: URL)
   const analysisRetry = request.method === 'POST' && pathname.match(/^\/api\/analysis\/jobs\/([^/]+)\/retry$/); if (analysisRetry) return json(response, 202, analysis.retry(analysisRetry[1]))
   const analysisDelete = request.method === 'DELETE' && pathname.match(/^\/api\/analysis\/jobs\/([^/]+)$/); if (analysisDelete) { analysis.delete(analysisDelete[1]); return json(response, 200, null) }
   if (request.method === 'GET' && pathname === '/api/codex/status') return json(response, 200, await codex.status())
+  if (request.method === 'GET' && pathname === '/api/codex/connection') return json(response, 200, codex.connectionPublic())
+  if (request.method === 'PUT' && pathname === '/api/codex/connection') {
+    const value = await body<{
+      mode?: 'official' | 'provider' | 'cc_switch'
+      activeProviderId?: string
+      ccSwitchBaseUrl?: string
+      ccSwitchModel?: string
+      ccSwitchReasoningEffort?: string
+    }>(request)
+    return json(response, 200, await codex.updateConnection(value))
+  }
+  if (request.method === 'POST' && pathname === '/api/codex/providers') {
+    return json(response, 200, await codex.createProvider(await body<Record<string, unknown>>(request)))
+  }
+  const providerUpdate = request.method === 'PUT' && pathname.match(/^\/api\/codex\/providers\/([^/]+)$/)
+  if (providerUpdate) return json(response, 200, await codex.updateProvider(providerUpdate[1], await body<Record<string, unknown>>(request)))
+  const providerDelete = request.method === 'DELETE' && pathname.match(/^\/api\/codex\/providers\/([^/]+)$/)
+  if (providerDelete) return json(response, 200, await codex.deleteProvider(providerDelete[1]))
+  if (request.method === 'POST' && pathname === '/api/codex/connection/test') {
+    return json(response, 200, await codex.testConnection(await body<{ mode?: 'official' | 'provider' | 'cc_switch'; providerId?: string }>(request)))
+  }
   if (request.method === 'POST' && pathname === '/api/codex/login') { codex.login(); return json(response, 202, await codex.status()) }
   if (request.method === 'POST' && pathname === '/api/codex/login/cancel') { codex.cancelLogin(); return json(response, 200, await codex.status()) }
   if (request.method === 'POST' && pathname === '/api/codex/logout') { await codex.logout(); return json(response, 200, await codex.status()) }

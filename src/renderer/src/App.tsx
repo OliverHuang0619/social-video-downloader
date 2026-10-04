@@ -1,5 +1,5 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import type { AnalysisJob, BrowserStatus, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, DownloadJob, DownloadOptions, MediaAsset, MediaFileHash, MediaFileMetadata, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, QuickTimeQuality, RemakeJob, ToolStatus } from '../../shared/types'
+import type { AnalysisJob, BrowserStatus, CodexConnectionPublic, CodexProviderPublic, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, DownloadJob, DownloadOptions, MediaAsset, MediaFileHash, MediaFileMetadata, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, QuickTimeQuality, RemakeJob, ToolStatus } from '../../shared/types'
 import { automaticPlatformPublishTimes, filterMediaAssets, mediaAssetDirectory, normalizePublishTopics, type LibraryStateFilter } from '../../shared/core'
 import { api, onEvent, type WorkbenchEvent } from './api'
 import './styles.css'
@@ -569,13 +569,106 @@ function usageWindowName(minutes?: number) {
 }
 
 function CodexRuntimeStatus({ status }: { status: CodexStatus }) {
+  const modeLabel = status.mode === 'provider' ? '直连供应商' : status.mode === 'cc_switch' ? 'CC Switch 代理' : '官方 ChatGPT'
   const windows = status.usage?.limits.flatMap(limit => [limit.primary, limit.secondary].filter(Boolean).map((window, index) => ({ ...window!, key: `${limit.id}-${index}`, name: limit.name || usageWindowName(window!.windowDurationMins) }))) || []
-  return <div className="codex-runtime"><div className="codex-runtime-grid"><div><span>当前模型</span><strong>{status.model}</strong></div><div><span>推理强度</span><strong>{status.reasoningEffort}</strong></div>{status.usage?.planType ? <div><span>账号套餐</span><strong>{status.usage.planType.toUpperCase()}</strong></div> : null}</div>{windows.map(window => <div className="codex-usage" key={window.key}><div className="row between"><span>{window.name}</span><strong>剩余 {window.remainingPercent}%</strong></div><div className="codex-usage-bar" role="progressbar" aria-label={window.name} aria-valuemin={0} aria-valuemax={100} aria-valuenow={window.remainingPercent}><i style={{ width: `${window.remainingPercent}%` }} /></div><small>已使用 {window.usedPercent}%{window.resetsAt ? ` · ${new Date(window.resetsAt * 1000).toLocaleString()} 重置` : ''}</small></div>)}{status.usage?.ordinaryUsageAllowed === false ? <p className="error">当前普通包含用量已不可用。</p> : null}{status.usageUnavailable ? <p className="muted">Codex 暂未返回剩余用量，可稍后刷新。</p> : null}</div>
+  return <div className="codex-runtime"><div className="codex-runtime-grid"><div><span>连接模式</span><strong>{modeLabel}</strong></div><div><span>当前模型</span><strong>{status.model}</strong></div><div><span>推理强度</span><strong>{status.reasoningEffort}</strong></div>{status.usage?.planType ? <div><span>账号套餐</span><strong>{status.usage.planType.toUpperCase()}</strong></div> : null}</div>{windows.map(window => <div className="codex-usage" key={window.key}><div className="row between"><span>{window.name}</span><strong>剩余 {window.remainingPercent}%</strong></div><div className="codex-usage-bar" role="progressbar" aria-label={window.name} aria-valuemin={0} aria-valuemax={100} aria-valuenow={window.remainingPercent}><i style={{ width: `${window.remainingPercent}%` }} /></div><small>已使用 {window.usedPercent}%{window.resetsAt ? ` · ${new Date(window.resetsAt * 1000).toLocaleString()} 重置` : ''}</small></div>)}{status.usage?.ordinaryUsageAllowed === false ? <p className="error">当前普通包含用量已不可用。</p> : null}{status.usageUnavailable ? <p className="muted">Codex 暂未返回剩余用量，可稍后刷新。</p> : null}</div>
 }
 
 const shortVersion = (value?: string) => value?.match(/\d+(\.\d+)+/)?.[0] || value || '已就绪'
 
+function CodexConnectionPanel({ connection, refresh }: { connection: CodexConnectionPublic; refresh: () => void }) {
+  const active = connection.providers.find(item => item.id === connection.activeProviderId)
+  const [mode, setMode] = useState(connection.mode)
+  const [ccSwitchBaseUrl, setCcSwitchBaseUrl] = useState(connection.ccSwitchBaseUrl)
+  const [ccSwitchModel, setCcSwitchModel] = useState(connection.ccSwitchModel || '')
+  const [selectedId, setSelectedId] = useState(connection.activeProviderId || connection.providers[0]?.id || '')
+  const selected = connection.providers.find(item => item.id === selectedId) || active
+  const [name, setName] = useState(selected?.name || '')
+  const [baseUrl, setBaseUrl] = useState(selected?.baseUrl || '')
+  const [apiKey, setApiKey] = useState('')
+  const [model, setModel] = useState(selected?.model || '')
+  const [reasoningEffort, setReasoningEffort] = useState(selected?.reasoningEffort || 'medium')
+  const [message, setMessage] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    setMode(connection.mode)
+    setCcSwitchBaseUrl(connection.ccSwitchBaseUrl)
+    setCcSwitchModel(connection.ccSwitchModel || '')
+    const nextSelected = connection.activeProviderId || connection.providers[0]?.id || ''
+    setSelectedId(nextSelected)
+  }, [connection])
+
+  useEffect(() => {
+    const provider = connection.providers.find(item => item.id === selectedId)
+    setName(provider?.name || '')
+    setBaseUrl(provider?.baseUrl || '')
+    setModel(provider?.model || '')
+    setReasoningEffort(provider?.reasoningEffort || 'medium')
+    setApiKey('')
+  }, [selectedId, connection.providers])
+
+  const run = async (action: () => Promise<unknown>, success = '配置已保存，将在后续新任务中生效') => {
+    setBusy(true); setMessage('')
+    try { await action(); setMessage(success); refresh() }
+    catch (error) { setMessage(errorText(error)) }
+    finally { setBusy(false) }
+  }
+
+  return <div className="codex-connection">
+    <div className="codex-mode-row" role="radiogroup" aria-label="Codex 连接模式">
+      {([['official', '官方 ChatGPT'], ['provider', '直连供应商'], ['cc_switch', 'CC Switch 代理']] as const).map(([value, label]) => (
+        <label key={value} className={mode === value ? 'active' : ''}>
+          <input type="radio" name="codex-mode" value={value} checked={mode === value} disabled={busy || (value === 'provider' && !connection.providers.length)} onChange={() => setMode(value)} />
+          <span>{label}</span>
+        </label>
+      ))}
+    </div>
+    <div className="row">
+      <button className="primary" disabled={busy} onClick={() => void run(() => api.codex.updateConnection({
+        mode,
+        activeProviderId: selectedId || undefined,
+        ccSwitchBaseUrl,
+        ccSwitchModel: ccSwitchModel || undefined,
+      }))}>应用连接模式</button>
+      <button disabled={busy} onClick={() => void run(() => api.codex.testConnection({ mode, providerId: selectedId || undefined }), '测试完成')}>测试连通</button>
+    </div>
+
+    {mode === 'cc_switch' ? <div className="codex-form-grid">
+      <label>代理 Base URL<input value={ccSwitchBaseUrl} onChange={event => setCcSwitchBaseUrl(event.target.value)} placeholder="http://host.docker.internal:15721/v1" /></label>
+      <label>代理模型<input value={ccSwitchModel} onChange={event => setCcSwitchModel(event.target.value)} placeholder="tc-code-latest" /></label>
+    </div> : null}
+
+    <div className="codex-providers">
+      <div className="row between">
+        <h3>供应商</h3>
+        <div className="row">
+          <button disabled={busy} onClick={() => void run(async () => { const created = await api.codex.createProvider({ template: 'tencent_token_plan' }); setSelectedId(created.id) }, '已创建腾讯 Token Plan 模板')}>从腾讯模板新建</button>
+          <button disabled={busy} onClick={() => void run(async () => { const created = await api.codex.createProvider({ name: '自定义供应商', baseUrl: '', model: 'gpt-5.6-sol' }); setSelectedId(created.id) }, '已创建自定义供应商')}>新建自定义</button>
+        </div>
+      </div>
+      {connection.providers.length ? <select value={selectedId} onChange={event => setSelectedId(event.target.value)}>
+        {connection.providers.map((provider: CodexProviderPublic) => <option key={provider.id} value={provider.id}>{provider.name}{provider.apiKeyConfigured ? '' : '（未配置 Key）'}{provider.id === connection.activeProviderId ? ' · 当前' : ''}</option>)}
+      </select> : <p className="muted">还没有供应商。可从腾讯模板新建。</p>}
+      {selected ? <div className="codex-form-grid">
+        <label>名称<input value={name} onChange={event => setName(event.target.value)} /></label>
+        <label>Base URL<input value={baseUrl} onChange={event => setBaseUrl(event.target.value)} /></label>
+        <label>API Key<input type="password" value={apiKey} onChange={event => setApiKey(event.target.value)} placeholder={selected.apiKeyConfigured ? selected.apiKeyMasked || '已配置，留空不修改' : '粘贴 API Key'} /></label>
+        <label>模型<input value={model} onChange={event => setModel(event.target.value)} /></label>
+        <label>推理强度<select value={reasoningEffort} onChange={event => setReasoningEffort(event.target.value)}><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label>
+      </div> : null}
+      {selected ? <div className="row">
+        <button className="primary" disabled={busy} onClick={() => void run(() => api.codex.updateProvider(selected.id, { name, baseUrl, model, reasoningEffort, ...(apiKey ? { apiKey } : {}) }))}>保存供应商</button>
+        <button disabled={busy} onClick={() => void run(() => api.codex.updateConnection({ mode: 'provider', activeProviderId: selected.id }))}>设为当前并直连</button>
+        <button disabled={busy} onClick={() => void run(() => api.codex.deleteProvider(selected.id), '已删除供应商')}>删除</button>
+      </div> : null}
+    </div>
+    {message ? <p className={/失败|错误|需要|不可|未找到|尚未|超时/.test(message) ? 'error' : 'muted'}>{message}</p> : null}
+  </div>
+}
+
 function SettingsPage({ tools, codex, browser, refresh, logout }: { tools: ToolStatus | null; codex: CodexStatus | null; browser: BrowserStatus | null; refresh: () => void; logout: () => void }) {
+  const official = !codex || codex.mode === 'official'
   return <div className="settings-grid">
     <section className="panel settings-section">
       <h2>运行工具</h2>
@@ -587,8 +680,14 @@ function SettingsPage({ tools, codex, browser, refresh, logout }: { tools: ToolS
       <h2>Codex 视频分析</h2>
       <p>{codex?.message || '正在检查…'}</p>
       {codex ? <CodexRuntimeStatus status={codex} /> : null}
-      {codex?.loginOutput && codex ? <CodexLoginDetails status={codex} /> : null}
-      <div className="row"><button className="primary" disabled={!codex?.available || codex.busy || codex.authenticated} onClick={() => void api.codex.login().then(refresh)}>设备代码登录</button>{codex?.busy ? <button onClick={() => void api.codex.cancel().then(refresh)}>取消登录</button> : null}{codex?.authenticated ? <button onClick={() => void api.codex.logout().then(refresh)}>退出 Codex</button> : null}</div>
+      {codex?.connection ? <CodexConnectionPanel connection={codex.connection} refresh={refresh} /> : null}
+      {official && codex?.loginOutput ? <CodexLoginDetails status={codex} /> : null}
+      <div className="row">
+        <button className="primary" disabled={!codex?.available || !official || codex.busy || codex.authenticated} onClick={() => void api.codex.login().then(refresh)}>设备代码登录</button>
+        {codex?.busy ? <button onClick={() => void api.codex.cancel().then(refresh)}>取消登录</button> : null}
+        {official && codex?.authenticated ? <button onClick={() => void api.codex.logout().then(refresh)}>退出 Codex</button> : null}
+      </div>
+      {!official ? <p className="muted">当前为非官方模式，设备码登录已禁用。切换回「官方 ChatGPT」可恢复登录态（不会因切换丢失）。</p> : null}
     </section>
     <section className="panel settings-section">
       <h2>抖音浏览器</h2>

@@ -78,6 +78,16 @@ BIND_ADDRESS=0.0.0.0 docker compose up -d
 
 视频分析默认固定使用 `gpt-5.6-sol` 和 `medium` 推理强度，避免 Codex CLI 的内置默认值升级后改变分析行为。如需要临时覆盖，可在部署时设置 `SVD_CODEX_MODEL` 和 `SVD_CODEX_REASONING_EFFORT`。
 
+### Codex 多平台连接
+
+设置页「Codex 视频分析」支持三种连接模式（分析与 Hypit 共用）：
+
+1. **官方 ChatGPT**：设备码登录（默认）
+2. **直连供应商**：如腾讯 Token Plan（模板预填 `https://tokenhub.tencentmaas.com/plan/v3` 与 `tc-code-latest`），填写 API Key 后切换
+3. **CC Switch 代理**：默认 `http://host.docker.internal:15721/v1`（依赖 compose 的 `extra_hosts`）；供应商切换仍在宿主 CC Switch 完成
+
+连接配置保存在 `config/codex-providers.json`。切换离开官方模式时会把 `auth.json` 备份为 `official-auth.stash.json`，切回官方可恢复，无需重新设备码登录。配置变更对**后续新任务**生效，不会中断正在运行的分析/重新制作。
+
 ### 首次登录抖音
 
 进入“设置”，先打开“远程浏览器”，再点击“登录抖音”并在远程 Chromium 中扫码。登录态保存在 `config/douyin-profile`。遇到验证码、账号验证或风险控制时，任务会暂停等待人工处理，不会尝试绕过。
