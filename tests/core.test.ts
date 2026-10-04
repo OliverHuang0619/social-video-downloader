@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { automaticPlatformPublishTimes, buildFormatArgs, detectPlatform, filterMediaAssets, formatsFromYtDlp, localPublishSubmissionTimes, mediaAssetDirectory, nextSafePlatformPublishTime, normalizePublishTopics, normalizeUrls, randomPublishSubmissionDelayMs, sanitizeFilename } from '../src/shared/core'
-import { buildOutputTemplate, DownloadQueue, parseDownloadOutput, summarizeProcessError } from '../src/main/queue'
+import { buildOutputTemplate, DownloadQueue, parseDownloadOutput, QUICKTIME_MAX_EDGE, quickTimeArgs, summarizeProcessError } from '../src/main/queue'
 import { classifyError, mediaFromGalleryDlLine, youtubeAttemptSources, youtubeCookieArgs } from '../src/main/media'
 import { CodexService, cleanCodexOutput, parseCodexLoginOutput, parseCodexRateLimits, resolveCodexAnalysisConfig } from '../src/server/codex'
 import { executeAnalysisProcess, parseCodexProgressLine } from '../src/server/analysis'
@@ -153,6 +153,16 @@ describe('下载队列', () => {
     expect(parseDownloadOutput('[Merger] Merging formats into "video.mp4"')).toEqual({ detail: '正在合并并处理媒体文件…' })
     expect(parseDownloadOutput('[download] Resuming download at byte 1048576')).toEqual({ detail: '发现本地缓存，从断点继续下载…' })
     expect(parseDownloadOutput('[download] video.mp4 has already been downloaded')).toEqual({ detail: '文件已存在，复用本地文件…' })
+  })
+  it('QuickTime 转码限制为 1080p 级别并使用低内存预设', () => {
+    const args = quickTimeArgs('/downloads/a.mp4', '/downloads/a.quicktime.mp4')
+    const filter = args[args.indexOf('-vf') + 1]
+    expect(filter).toContain(`min(iw,${QUICKTIME_MAX_EDGE})`)
+    expect(filter).toContain('force_original_aspect_ratio=decrease')
+    expect(filter).toContain('force_divisible_by=2')
+    expect(args.slice(args.indexOf('-preset'), args.indexOf('-preset') + 2)).toEqual(['-preset', 'veryfast'])
+    expect(args).toContain('+faststart')
+    expect(args.at(-1)).toBe('/downloads/a.quicktime.mp4')
   })
   it('从 ffmpeg / yt-dlp 输出中提取真正的错误原因', () => {
     const ffmpeg = 'ffmpeg version 5.1.9\n  vendor_id       : [0][0][0][0]\n  encoder         : Lavc59.37.100 aac\nframe=    1 fps=0.0 q=0.0 size=       0kB time=00:00:00.00 bitrate=N/A speed=   0x\r[aac @ 0x1] Error submitting packet\nConversion failed!\nframe=   46 fps=0.0 q=0.0 size=       0kB'

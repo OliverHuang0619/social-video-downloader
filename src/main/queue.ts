@@ -43,9 +43,33 @@ export function buildOutputTemplate(folder: string, item: StartRequest['items'][
   return path.join(folder, `${date}_${title}_[${id}].%(ext)s`)
 }
 
+/** Longest side of the QuickTime-compatible output; 4K sources are downscaled so one encode stays well under 1 GB. */
+export const QUICKTIME_MAX_EDGE = 1920
+
+/**
+ * ffmpeg arguments for the QuickTime-compatible re-encode. Scales the longer
+ * edge down to QUICKTIME_MAX_EDGE (never upscales, keeps portrait videos
+ * portrait) and uses a fast x264 preset so memory and time stay bounded.
+ */
+export function quickTimeArgs(input: string, output: string) {
+  return ['-y', '-hide_banner', '-loglevel', 'error', '-stats', '-i', input, '-map', '0:v:0?', '-map', '0:a:0?',
+    '-vf', `scale=w='min(iw,${QUICKTIME_MAX_EDGE})':h='min(ih,${QUICKTIME_MAX_EDGE})':force_original_aspect_ratio=decrease:force_divisible_by=2`,
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', output]
+}
+
 export class DownloadQueue {
   private jobs = new Map<string, DownloadJob>(); private active = new Map<string, ChildProcessWithoutNullStreams>(); private report: (jobs: DownloadJob[]) => void = () => undefined
+  /** Jobs that finished downloading and are waiting for / running the single transcode lane. */
+  private transcoding = new Set<string>(); private transcodeBusy = false; private transcodeWaiters: Array<() => void> = []
   constructor(private tools: ToolManager) {}
+  /** Downloads currently using one of the three network slots (transcoding jobs no longer occupy one). */
+  private downloadingCount() { return this.snapshot().filter(job => job.status === 'downloading' && !this.transcoding.has(job.id)).length }
+  private async acquireTranscodeLane() {
+    if (!this.transcodeBusy) { this.transcodeBusy = true; return }
+    // The lane is handed over directly to the next waiter, so it stays busy.
+    await new Promise<void>(resolve => this.transcodeWaiters.push(resolve))
+  }
+  private releaseTranscodeLane() { const next = this.transcodeWaiters.shift(); if (next) next(); else this.transcodeBusy = false }
   snapshot() { return [...this.jobs.values()] }
   get(id: string) { return this.jobs.get(id) }
   setReporter(report: (jobs: DownloadJob[]) => void) { this.report = report }
@@ -77,7 +101,7 @@ export class DownloadQueue {
   shutdown() { for (const child of this.active.values()) child.kill('SIGTERM') }
   private cancelOne(id: string) { const job = this.jobs.get(id); if (!job || ['completed', 'skipped'].includes(job.status)) return; job.status = 'cancelled'; this.active.get(id)?.kill('SIGTERM'); this.active.delete(id) }
   private pump() {
-    while (this.snapshot().filter(job => job.status === 'downloading').length < 3) {
+    while (this.downloadingCount() < 3) {
       const job = this.snapshot().find(candidate => candidate.status === 'queued')
       if (!job) break
       // Reserve the slot before run() reaches its first await. Without this,
@@ -110,7 +134,8 @@ export class DownloadQueue {
     let error = '', stdoutBuffer = '', stderrBuffer = '', downloadedPath = '', alreadyDownloaded = false
     const handleLine = (line: string) => {
       if (!line) return
-      if (/already been downloaded|has already been downloaded/i.test(line)) alreadyDownloaded = true
+      const existing = line.match(/\[download\]\s+(.+?) has already been downloaded/i)
+      if (existing) { alreadyDownloaded = true; if (!downloadedPath) downloadedPath = existing[1].trim() }
       if (line.startsWith('svd-file:')) { downloadedPath = line.slice('svd-file:'.length).trim(); return }
       const update = parseDownloadOutput(line)
       if (!update) return
@@ -139,12 +164,17 @@ export class DownloadQueue {
           const needsConversion = job.options.quickTimeCompatible && selected?.kind !== 'audio-only' && !selected?.quickTimeCompatible
           if (needsConversion && downloadedPath) {
             if (!ffmpeg) throw new Error('QuickTime 转换需要 FFmpeg')
-            downloadedPath = await this.transcodeQuickTime(job, ffmpeg, downloadedPath)
+            // Free the network slot while this job waits for the single transcode lane.
+            this.transcoding.add(job.id); job.progress = 99; job.detail = alreadyDownloaded ? '已复用本地文件，等待转码…' : '下载完成，等待转码…'; this.emit(); this.pump()
+            await this.acquireTranscodeLane()
+            try { if (String(job.status) === 'cancelled') throw new Error('转换已取消'); downloadedPath = await this.transcodeQuickTime(job, ffmpeg, downloadedPath) }
+            finally { this.releaseTranscodeLane(); this.transcoding.delete(job.id) }
           }
           job.status = alreadyDownloaded ? 'skipped' : 'completed'; job.progress = 100
-          job.detail = job.status === 'skipped' ? '文件已存在，未重复下载' : '下载完成'
+          job.detail = alreadyDownloaded ? (needsConversion ? '已复用本地文件并完成转码' : '文件已存在，未重复下载') : '下载完成'
           job.outputPath = downloadedPath || undefined
         } catch (conversionError) {
+          this.transcoding.delete(job.id)
           if (String(job.status) !== 'cancelled') { job.status = 'failed'; job.detail = undefined; job.error = conversionError instanceof Error ? conversionError.message : String(conversionError) }
         }
       }
@@ -157,16 +187,17 @@ export class DownloadQueue {
   private transcodeQuickTime(job: DownloadJob, ffmpeg: string, input: string) {
     const parsed = path.parse(input)
     const output = path.join(parsed.dir, `${parsed.name}.quicktime.mp4`)
-    job.detail = '正在转换为 QuickTime 兼容格式…'; job.progress = 99; this.emit()
+    job.detail = '正在转换为 QuickTime 兼容格式（最高 1080p）…'; job.progress = 99; this.emit()
     return new Promise<string>((resolve, reject) => {
-      const child = spawn(ffmpeg, ['-y', '-i', input, '-map', '0:v:0?', '-map', '0:a:0?', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-movflags', '+faststart', output], { windowsHide: true })
+      const child = spawn(ffmpeg, quickTimeArgs(input, output), { windowsHide: true })
       this.active.set(job.id, child)
       let stderr = ''
       child.stderr.on('data', data => { stderr = `${stderr}${data.toString()}`.slice(-1024 * 1024) })
       child.on('error', reject)
-      child.on('close', code => {
+      child.on('close', (code, signal) => {
         this.active.delete(job.id)
         if (job.status === 'cancelled') { reject(new Error('转换已取消')); return }
+        if (signal) { reject(new Error(`QuickTime 转换被系统终止（${signal}），通常是内存不足；重试会复用已下载的文件`)); return }
         if (code !== 0) { reject(new Error(`QuickTime 转换失败：${summarizeProcessError(stderr, '未知错误')}`)); return }
         void rm(input, { force: true }).then(() => resolve(output), reject)
       })
