@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { automaticPlatformPublishTimes, buildFormatArgs, detectPlatform, filterMediaAssets, formatsFromYtDlp, localPublishSubmissionTimes, mediaAssetDirectory, nextSafePlatformPublishTime, normalizePublishTopics, normalizeUrls, randomPublishSubmissionDelayMs, sanitizeFilename } from '../src/shared/core'
-import { buildOutputTemplate, DownloadQueue, parseDownloadOutput, QUICKTIME_MAX_EDGE, quickTimeArgs, summarizeProcessError } from '../src/main/queue'
+import { buildOutputTemplate, DownloadQueue, parseDownloadOutput, parseTranscodeProgress, QUICKTIME_MAX_EDGE, quickTimeArgs, summarizeProcessError } from '../src/main/queue'
 import { classifyError, mediaFromGalleryDlLine, youtubeAttemptSources, youtubeCookieArgs } from '../src/main/media'
 import { CodexService, cleanCodexOutput, parseCodexLoginOutput, parseCodexRateLimits, resolveCodexAnalysisConfig } from '../src/server/codex'
 import { executeAnalysisProcess, parseCodexProgressLine } from '../src/server/analysis'
@@ -153,6 +153,22 @@ describe('下载队列', () => {
     expect(parseDownloadOutput('[Merger] Merging formats into "video.mp4"')).toEqual({ detail: '正在合并并处理媒体文件…' })
     expect(parseDownloadOutput('[download] Resuming download at byte 1048576')).toEqual({ detail: '发现本地缓存，从断点继续下载…' })
     expect(parseDownloadOutput('[download] video.mp4 has already been downloaded')).toEqual({ detail: '文件已存在，复用本地文件…' })
+  })
+  it('识别各平台的信息获取阶段，不再把 YouTube 标成 Instagram', () => {
+    expect(parseDownloadOutput('[youtube] Extracting URL: https://www.youtube.com/watch?v=abc')).toEqual({ detail: '正在获取视频信息…' })
+    expect(parseDownloadOutput('[youtube] abc: Downloading webpage')).toEqual({ detail: '正在获取视频信息…' })
+    expect(parseDownloadOutput('[youtube] abc: Downloading web_embedded player API JSON')).toEqual({ detail: '正在获取视频信息…' })
+    expect(parseDownloadOutput('[youtube] [jsc:node] Solving JS challenges')).toEqual({ detail: '正在通过平台脚本验证…' })
+    expect(parseDownloadOutput('[info] abc: Downloading 1 format(s): 137+140')).toEqual({ detail: '已选定格式，准备下载…' })
+    expect(parseDownloadOutput('[download] Sleeping 5.00 seconds as required by the site...')).toEqual({ detail: '平台要求稍作等待，即将开始下载…' })
+    expect(parseDownloadOutput('[download] Downloading item 1 of 3')).toBeUndefined()
+  })
+  it('从 ffmpeg -progress 输出计算转码百分比', () => {
+    expect(parseTranscodeProgress('out_time_us=60000000', 120)).toBe(50)
+    expect(parseTranscodeProgress('out_time_ms=60000000', 120)).toBe(50)
+    expect(parseTranscodeProgress('out_time_us=999000000', 120)).toBe(100)
+    expect(parseTranscodeProgress('frame=42', 120)).toBeUndefined()
+    expect(parseTranscodeProgress('out_time_us=60000000', 0)).toBeUndefined()
   })
   it('QuickTime 转码默认限制为 1080p 级别并使用低内存预设', () => {
     const args = quickTimeArgs('/downloads/a.mp4', '/downloads/a.quicktime.mp4')

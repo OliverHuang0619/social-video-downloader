@@ -20,10 +20,26 @@ export function parseDownloadOutput(line: string): ParsedDownloadOutput | undefi
   if (/already been downloaded/i.test(line)) return { detail: '文件已存在，复用本地文件…' }
   if (/Extracting cookies from|Loading cookies/i.test(line)) return { detail: '正在读取服务器 Cookie 文件…' }
   if (/Extracted \d+ cookies/i.test(line)) return { detail: 'Cookie 读取完成，正在获取视频信息…' }
-  if (/Downloading video info|Extracting URL/i.test(line)) return { detail: '正在获取 Instagram 视频信息…' }
   if (/\[download\] Destination:/i.test(line)) return { detail: '正在下载媒体文件…' }
   if (/\[(?:Merger|VideoRemuxer|ExtractAudio|FFmpeg)\]/i.test(line)) return { detail: '正在合并并处理媒体文件…' }
+  if (/\[info\].*Downloading \d+ format/i.test(line)) return { detail: '已选定格式，准备下载…' }
+  if (/\[download\] Sleeping [\d.]+ seconds/i.test(line)) return { detail: '平台要求稍作等待，即将开始下载…' }
+  if (/Solving JS challenge|\[jsc[^\]]*\]/i.test(line)) return { detail: '正在通过平台脚本验证…' }
+  // Extractor chatter: "[youtube] Extracting URL", "[youtube] abc: Downloading webpage / player / API JSON".
+  if (/Downloading video info|Extracting URL|^\[(?!download\])[^\]]+\]\s.*Downloading /i.test(line)) return { detail: '正在获取视频信息…' }
   return undefined
+}
+
+/**
+ * Parses one `-progress pipe:1` key=value line from ffmpeg into a 0–100 percent
+ * of `durationSeconds`. Returns undefined for lines that carry no time or when
+ * the duration is unknown.
+ */
+export function parseTranscodeProgress(line: string, durationSeconds: number): number | undefined {
+  if (!durationSeconds || durationSeconds <= 0) return undefined
+  const us = line.match(/^out_time_us=(\d+)/) || line.match(/^out_time_ms=(\d+)/)
+  if (!us) return undefined
+  return Math.max(0, Math.min(100, Math.floor(Number(us[1]) / 1_000_000 / durationSeconds * 100)))
 }
 
 /** Picks the lines of yt-dlp/ffmpeg stderr that explain a failure, skipping progress and metadata noise. */
@@ -65,7 +81,8 @@ export function quickTimeArgs(input: string, output: string, quality: QuickTimeQ
   const scale = preset.maxEdge
     ? ['-vf', `scale=w='min(iw,${preset.maxEdge})':h='min(ih,${preset.maxEdge})':force_original_aspect_ratio=decrease:force_divisible_by=2`]
     : ['-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2']
-  return ['-y', '-hide_banner', '-loglevel', 'error', '-stats', '-i', input, '-map', '0:v:0?', '-map', '0:a:0?', ...scale,
+  // `-progress pipe:1` streams key=value progress to stdout so the queue can show a percentage; stderr stays errors-only.
+  return ['-y', '-hide_banner', '-loglevel', 'error', '-nostats', '-progress', 'pipe:1', '-i', input, '-map', '0:v:0?', '-map', '0:a:0?', ...scale,
     '-c:v', 'libx264', '-preset', 'veryfast', '-crf', String(preset.crf), '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', output]
 }
 
@@ -133,7 +150,9 @@ export class DownloadQueue {
     const template = buildOutputTemplate(folder, job.item)
     // `download:` selects yt-dlp's progress-template type and is not printed.
     // Keep a second, literal prefix so the stream remains machine-readable.
-    const args = ['--newline', '--no-overwrites', '--continue', '--retries', '3', '--fragment-retries', '3', '-o', template, '--progress-template', 'download:svd:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s', '--print', 'after_move:svd-file:%(filepath)s', ...buildFormatArgs(job.options, job.item)]
+    // `--print` implies `--quiet`, which would also hide progress and extractor
+    // lines; `--no-quiet --progress` restores them so the UI can follow along.
+    const args = ['--no-quiet', '--progress', '--newline', '--no-overwrites', '--continue', '--retries', '3', '--fragment-retries', '3', '-o', template, '--progress-template', 'download:svd:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s', '--print', 'after_move:svd-file:%(filepath)s', ...buildFormatArgs(job.options, job.item)]
     if (ffmpeg) args.push('--ffmpeg-location', ffmpeg)
     if (job.options.cookieSource !== 'none') {
       args.push('--cookies', process.env.SVD_COOKIES_FILE || '/config/cookies.txt')
@@ -200,11 +219,20 @@ export class DownloadQueue {
     const parsed = path.parse(input)
     const output = path.join(parsed.dir, `${parsed.name}.quicktime.mp4`)
     const quality = job.options.quickTimeQuality || DEFAULT_QUICKTIME_QUALITY
-    job.detail = `正在转换为 QuickTime 兼容格式（${(QUICKTIME_PRESETS[quality] || QUICKTIME_PRESETS[DEFAULT_QUICKTIME_QUALITY]).label}）…`; job.progress = 99; this.emit()
+    const label = `正在转换为 QuickTime 兼容格式（${(QUICKTIME_PRESETS[quality] || QUICKTIME_PRESETS[DEFAULT_QUICKTIME_QUALITY]).label}）`
+    job.detail = `${label}…`; job.progress = 99; job.speed = undefined; job.eta = undefined; this.emit()
     return new Promise<string>((resolve, reject) => {
       const child = spawn(ffmpeg, quickTimeArgs(input, output, quality), { windowsHide: true })
       this.active.set(job.id, child)
-      let stderr = ''
+      let stderr = '', stdoutBuffer = '', lastPercent = -1
+      child.stdout.on('data', data => {
+        const lines = `${stdoutBuffer}${data.toString()}`.split(/\r?\n/); stdoutBuffer = lines.pop() || ''
+        for (const line of lines) {
+          const percent = parseTranscodeProgress(line, job.item.duration)
+          if (percent === undefined || percent === lastPercent) continue
+          lastPercent = percent; job.detail = `${label} ${percent}%`; this.emit()
+        }
+      })
       child.stderr.on('data', data => { stderr = `${stderr}${data.toString()}`.slice(-1024 * 1024) })
       child.on('error', reject)
       child.on('close', (code, signal) => {
