@@ -103,6 +103,7 @@ export interface MediaAsset {
 }
 
 export interface MediaFileHash { algorithm: 'sha256'; hash: string; size: number; modifiedAt: string }
+export interface MediaFileMetadata { size: number; duration?: number; modifiedAt: string }
 
 export interface AnalysisJob {
   id: string

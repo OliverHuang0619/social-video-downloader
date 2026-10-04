@@ -15,6 +15,7 @@ export class LibraryService {
   private roots: string[]
   private thumbnailJobs = new Map<string, Promise<string>>()
   private hashCache = new Map<string, { key: string; value: { algorithm: 'sha256'; hash: string; size: number; modifiedAt: string } }>()
+  private metadataCache = new Map<string, { key: string; value: { size: number; duration?: number; modifiedAt: string } }>()
   private thumbnailActive = 0
   private thumbnailWaiters: Array<() => void> = []
   constructor(private db: AppDatabase) { this.roots = [process.env.SVD_OUTPUT_DIR || '/downloads', process.env.SVD_IMPORT_DIR || '/imports'].map(value => path.resolve(value)) }
@@ -130,5 +131,18 @@ export class LibraryService {
     const hash = await new Promise<string>((resolve, reject) => { const digest = createHash('sha256'), stream = createReadStream(file); stream.on('data', chunk => digest.update(chunk)); stream.once('error', reject); stream.once('end', () => resolve(digest.digest('hex'))) })
     const value = { algorithm: 'sha256' as const, hash, size: info.size, modifiedAt: info.mtime.toISOString() }
     this.hashCache.set(id, { key, value }); return value
+  }
+  async metadata(id: string) {
+    const asset = this.db.asset(id); if (!asset) throw Object.assign(new Error('视频不存在'), { statusCode: 404 })
+    const file = await this.allowed(asset.file); if (!file) throw Object.assign(new Error('不允许访问该文件'), { statusCode: 403 })
+    const info = await stat(file), key = `${file}:${info.size}:${info.mtimeMs}`, cached = this.metadataCache.get(id)
+    if (cached?.key === key) return cached.value
+    let duration = asset.duration
+    if (!duration) duration = await new Promise<number | undefined>(resolve => {
+      const child = spawn(process.env.SVD_FFPROBE_BIN || 'ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', file], { stdio: ['ignore', 'pipe', 'ignore'] })
+      let output = ''; child.stdout.on('data', chunk => { if (output.length < 100) output += String(chunk) }); child.once('error', () => resolve(undefined)); child.once('close', code => { const value = Number(output.trim()); resolve(code === 0 && Number.isFinite(value) && value > 0 ? value : undefined) })
+    })
+    const value = { size: info.size, duration, modifiedAt: info.mtime.toISOString() }
+    this.metadataCache.set(id, { key, value }); return value
   }
 }

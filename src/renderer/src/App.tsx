@@ -1,5 +1,5 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import type { AnalysisJob, BrowserStatus, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, DownloadJob, DownloadOptions, MediaAsset, MediaFileHash, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, QuickTimeQuality, RemakeJob, ToolStatus } from '../../shared/types'
+import type { AnalysisJob, BrowserStatus, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, DownloadJob, DownloadOptions, MediaAsset, MediaFileHash, MediaFileMetadata, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, QuickTimeQuality, RemakeJob, ToolStatus } from '../../shared/types'
 import { automaticPlatformPublishTimes, filterMediaAssets, mediaAssetDirectory, normalizePublishTopics, type LibraryStateFilter } from '../../shared/core'
 import { api, onEvent, type WorkbenchEvent } from './api'
 import './styles.css'
@@ -25,6 +25,7 @@ const quickTimeQualities: Array<{ value: QuickTimeQuality; label: string }> = [
 ]
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error)
 const formatDuration = (value?: number) => value ? `${Math.floor(value / 60)}:${String(Math.floor(value % 60)).padStart(2, '0')}` : '—'
+const formatBytes = (value: number) => value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(2)} GB` : value >= 1024 ** 2 ? `${(value / 1024 ** 2).toFixed(1)} MB` : `${Math.round(value / 1024)} KB`
 const formatGroups: Record<MediaFormatKind, string> = { 'video-audio': '视频与音频', 'video-only': '仅视频', 'audio-only': '仅音频' }
 const formatLabel = (format: MediaFormat) => `${format.height ? `${format.height}p` : format.bitrate ? `${Math.round(format.bitrate)}kbps` : '音频'} · ${format.ext.toUpperCase()}${format.quickTimeCompatible ? ' · QuickTime' : ''}`
 const taskNames: Record<string, string> = { queued: '等待中', downloading: '下载中', skipped: '已跳过', preparing: '准备媒体', analyzing: '分析中', directing: '创意制作中', building: '生成成片中', completed: '已完成', failed: '失败', cancelled: '已取消', waiting_local: '本地等待', running: '执行中', launching: '启动浏览器', uploading: '上传中', scheduling: '设置排期', waiting_covers: '等待横竖封面', submitting: '提交中', published: '已发布', scheduled: '已排期', needs_login: '需要登录', needs_attention: '需要检查', interrupted: '已中断', partial: '部分完成' }
@@ -343,16 +344,26 @@ const SearchIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="n
 
 const AssetCard = memo(function AssetCard({ asset, selected, remade, toggle, play, mark, publish }: { asset: MediaAsset; selected: boolean; remade: boolean; toggle: (id: string) => void; play: (asset: MediaAsset) => void; mark: (asset: MediaAsset) => void; publish: (asset: MediaAsset) => void }) {
   const analysis = asset.analysis
-  return <article className={`asset-card ${selected ? 'selected' : ''}`}>
+  const cardRef = useRef<HTMLElement>(null), [metadata, setMetadata] = useState<MediaFileMetadata | null>()
+  useEffect(() => {
+    const element = cardRef.current; if (!element) return
+    const load = () => { void api.library.metadata(asset.id).then(setMetadata).catch(() => setMetadata(null)) }
+    if (!('IntersectionObserver' in window)) { load(); return }
+    const observer = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) { observer.disconnect(); load() } }, { rootMargin: '320px' })
+    observer.observe(element); return () => observer.disconnect()
+  }, [asset.id])
+  const duration = metadata?.duration || asset.duration
+  return <article ref={cardRef} className={`asset-card ${selected ? 'selected' : ''}`}>
     <div className="asset-top">
       <label className="select" title={selected ? '取消选择' : '选择'}><input type="checkbox" checked={selected} onChange={() => toggle(asset.id)} aria-label={`选择 ${analysis?.title || asset.filename}`} /></label>
       <span className="asset-badges">{remade ? <span className="pill remade">已重新制作</span> : null}<span className={`pill ${asset.processingState}`}>{asset.processingState === 'processed' ? '已处理' : analysis ? '未处理' : '等待分析'}</span></span>
     </div>
-    <button className="preview" onClick={() => play(asset)} aria-label="播放预览"><FirstFrame asset={asset} />{asset.duration ? <span className="duration">{formatDuration(asset.duration)}</span> : null}</button>
+    <button className="preview" onClick={() => play(asset)} aria-label="播放预览"><FirstFrame asset={asset} />{duration ? <span className="duration">{formatDuration(duration)}</span> : null}</button>
     <div className="asset-copy">
       <h2 title={analysis?.title || asset.filename}>{analysis?.title || asset.filename}</h2>
       {analysis ? <p className="english" title={analysis.englishTitle}>{analysis.englishTitle}</p> : null}
       <p className="filename" title={asset.file}>{asset.filename}</p>
+      <p className="asset-media-meta"><span>{metadata === undefined ? '读取大小…' : metadata ? formatBytes(metadata.size) : '大小未知'}</span><i /> <span>{duration ? formatDuration(duration) : metadata === undefined ? '读取时长…' : '时长未知'}</span></p>
       {analysis ? <>
         <div className="asset-tags"><span className="category">{analysis.category}</span><span className="evidence" title={analysis.evidenceNote}><i className={`dot ${analysis.confidence}`} />置信度{confidenceNames[analysis.confidence] || analysis.confidence}</span></div>
         <div className="topics">{analysis.keyTopics.map(topic => <span key={topic}>#{topic}</span>)}</div>
@@ -479,10 +490,8 @@ function PublishBatchCard({ batch, reload }: { batch: PublishBatch; reload: () =
   </article>
 }
 
-const formatBytes = (value: number) => value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(2)} GB` : value >= 1024 ** 2 ? `${(value / 1024 ** 2).toFixed(1)} MB` : `${Math.round(value / 1024)} KB`
-
 function CompareDialog({ originals, remade, close }: { originals: MediaAsset[]; remade: MediaAsset[]; close: () => void }) {
-  const [originalId, setOriginalId] = useState(originals[0]?.id || ''), [remadeId, setRemadeId] = useState(remade[0]?.id || ''), [hashes, setHashes] = useState<Record<string, MediaFileHash | 'loading' | 'error'>>({}), [playing, setPlaying] = useState(false)
+  const [originalId, setOriginalId] = useState(originals[0]?.id || ''), [remadeId, setRemadeId] = useState(remade[0]?.id || ''), [hashes, setHashes] = useState<Record<string, MediaFileHash | 'loading' | 'error'>>({}), [durations, setDurations] = useState<Record<string, number>>({}), [playing, setPlaying] = useState(false)
   const left = useRef<HTMLVideoElement>(null), right = useRef<HTMLVideoElement>(null)
   const original = originals.find(asset => asset.id === originalId), output = remade.find(asset => asset.id === remadeId)
   useEffect(() => { for (const id of [originalId, remadeId]) if (id && !hashes[id]) { setHashes(current => ({ ...current, [id]: 'loading' })); void api.library.hash(id).then(value => setHashes(current => ({ ...current, [id]: value }))).catch(() => setHashes(current => ({ ...current, [id]: 'error' }))) } }, [originalId, remadeId, hashes])
@@ -491,14 +500,14 @@ function CompareDialog({ originals, remade, close }: { originals: MediaAsset[]; 
   const pauseBoth = () => { left.current?.pause(); right.current?.pause(); setPlaying(false) }
   const resetBoth = () => { pauseBoth(); if (left.current) left.current.currentTime = 0; if (right.current) right.current.currentTime = 0 }
   const syncRight = () => { if (!left.current || !right.current || !Number.isFinite(right.current.duration)) return; const target = Math.min(left.current.currentTime, right.current.duration); if (Math.abs(right.current.currentTime - target) > .3) right.current.currentTime = target }
-  const hashView = (asset?: MediaAsset) => { const value = asset ? hashes[asset.id] : undefined; return <div className="compare-hash"><span>SHA-256</span><code title={typeof value === 'object' ? value.hash : undefined}>{value === 'loading' || !value ? '计算中…' : value === 'error' ? '计算失败' : value.hash}</code>{typeof value === 'object' ? <small>{formatBytes(value.size)} · 修改于 {new Date(value.modifiedAt).toLocaleString()}</small> : null}</div> }
+  const hashView = (asset?: MediaAsset) => { const value = asset ? hashes[asset.id] : undefined, duration = asset ? durations[asset.id] ?? asset.duration : undefined; return <><div className="compare-file-meta"><span>大小<strong>{typeof value === 'object' ? formatBytes(value.size) : value === 'error' ? '读取失败' : '读取中…'}</strong></span><span>时长<strong>{duration ? formatDuration(duration) : '读取中…'}</strong></span></div><div className="compare-hash"><span>SHA-256</span><code title={typeof value === 'object' ? value.hash : undefined}>{value === 'loading' || !value ? '计算中…' : value === 'error' ? '计算失败' : value.hash}</code>{typeof value === 'object' ? <small>文件修改于 {new Date(value.modifiedAt).toLocaleString()}</small> : null}</div></> }
   return <div className="modal-bg" role="dialog" aria-modal="true" aria-label="原视频与重新制作视频对比" onMouseDown={close}>
     <div className="modal compare-modal" onMouseDown={event => event.stopPropagation()}>
       <div className="modal-head"><h2>视频前后对比</h2><p>使用统一控制同时播放；拖动左侧视频进度时，右侧会同步到相同时间。</p></div>
       <div className="compare-toolbar"><button className="primary" onClick={() => void (playing ? pauseBoth() : playBoth())}>{playing ? '同时暂停' : '同时播放'}</button><button onClick={resetBoth}>回到开头</button></div>
       <div className="compare-grid">
-        <section><div className="compare-title"><strong>原视频</strong><select value={originalId} onChange={event => setOriginalId(event.target.value)}>{originals.map(asset => <option value={asset.id} key={asset.id}>{asset.analysis?.title || asset.filename}</option>)}</select></div>{original ? <video ref={left} playsInline src={api.library.mediaUrl(original.id)} onPlay={() => void playBoth()} onPause={pauseBoth} onSeeked={syncRight} onTimeUpdate={syncRight} onEnded={pauseBoth} /> : null}{hashView(original)}</section>
-        <section><div className="compare-title"><strong>重新制作后</strong><select value={remadeId} onChange={event => setRemadeId(event.target.value)}>{remade.map(asset => <option value={asset.id} key={asset.id}>{asset.analysis?.title || asset.filename}</option>)}</select></div>{output ? <video ref={right} playsInline src={api.library.mediaUrl(output.id)} onEnded={pauseBoth} /> : null}{hashView(output)}</section>
+        <section><div className="compare-title"><strong>原视频</strong><select value={originalId} onChange={event => setOriginalId(event.target.value)}>{originals.map(asset => <option value={asset.id} key={asset.id}>{asset.analysis?.title || asset.filename}</option>)}</select></div>{original ? <video ref={left} playsInline src={api.library.mediaUrl(original.id)} onLoadedMetadata={event => setDurations(current => ({ ...current, [original.id]: event.currentTarget.duration }))} onPlay={() => void playBoth()} onPause={pauseBoth} onSeeked={syncRight} onTimeUpdate={syncRight} onEnded={pauseBoth} /> : null}{hashView(original)}</section>
+        <section><div className="compare-title"><strong>重新制作后</strong><select value={remadeId} onChange={event => setRemadeId(event.target.value)}>{remade.map(asset => <option value={asset.id} key={asset.id}>{asset.analysis?.title || asset.filename}</option>)}</select></div>{output ? <video ref={right} playsInline src={api.library.mediaUrl(output.id)} onLoadedMetadata={event => setDurations(current => ({ ...current, [output.id]: event.currentTarget.duration }))} onEnded={pauseBoth} /> : null}{hashView(output)}</section>
       </div>
       <div className="modal-foot"><button onClick={close}>关闭</button></div>
     </div>

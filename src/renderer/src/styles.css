@@ -533,6 +533,8 @@ button.small { min-height: 26px; padding: 0 8px; font-size: 12px; }
 .asset-copy h2 { font-size: 14.5px; line-height: 1.35; }
 .english { color: var(--ink-2); font-size: 13px; }
 .filename { color: var(--ink-3); font-size: 11px; overflow-wrap: anywhere; }
+.asset-media-meta { display: flex; align-items: center; gap: 7px; color: var(--ink-3); font: 11px/1.35 var(--font-data); }
+.asset-media-meta i { width: 3px; height: 3px; border-radius: 50%; background: var(--line-strong); }
 .asset-tags { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
 .category {
   display: inline-flex;
@@ -650,6 +652,10 @@ button.small { min-height: 26px; padding: 0 8px; font-size: 12px; }
 .compare-title strong { color: var(--ink); font-size: 13px; white-space: nowrap; }
 .compare-title select { width: 100%; min-width: 0; }
 .compare-grid video { display: block; width: 100%; aspect-ratio: 16 / 9; background: #08090b; object-fit: contain; }
+.compare-file-meta { display: grid; grid-template-columns: repeat(2, 1fr); border-top: 1px solid var(--line); }
+.compare-file-meta > span { display: grid; gap: 2px; padding: 9px 10px; color: var(--ink-3); font-size: 10.5px; }
+.compare-file-meta > span + span { border-left: 1px solid var(--line); }
+.compare-file-meta strong { color: var(--ink); font-family: var(--font-data); font-size: 12.5px; font-weight: 500; }
 .compare-hash { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 10px; padding: 10px; border-top: 1px solid var(--line); }
 .compare-hash > span { color: var(--ink-3); font-size: 11px; }
 .compare-hash code { color: var(--ink-2); font-family: var(--font-data); font-size: 11px; overflow-wrap: anywhere; }
