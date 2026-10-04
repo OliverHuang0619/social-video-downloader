@@ -499,6 +499,8 @@ button.small { min-height: 26px; padding: 0 8px; font-size: 12px; }
 }
 .asset-top .pill { pointer-events: auto; background: rgb(20 21 24 / 78%); backdrop-filter: blur(6px); }
 .asset-top .pill.processed { color: var(--ok); }
+.asset-top .asset-badges { display: flex; align-items: flex-end; flex-direction: column; gap: 5px; }
+.asset-top .pill.remade { color: var(--run); }
 
 .preview {
   position: relative;

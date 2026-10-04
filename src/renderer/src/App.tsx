@@ -10,11 +10,13 @@ type Tab = 'download' | 'library' | 'tasks' | 'settings'
 type TaskTab = 'analysis' | 'remake' | 'publisher'
 const NAVIGATION_STORAGE_KEY = 'social-video-workbench:navigation:v1'
 const TASK_TAB_STORAGE_KEY = 'social-video-workbench:task-tab:v1'
+const LIBRARY_DIRECTORY_STORAGE_KEY = 'social-video-workbench:library-directory:v1'
 const tabs = new Set<Tab>(['download', 'library', 'tasks', 'settings'])
 const taskTabs = new Set<TaskTab>(['analysis', 'remake', 'publisher'])
 function storedChoice<T extends string>(key: string, allowed: Set<T>, fallback: T) {
   try { const value = window.localStorage.getItem(key) as T | null; return value && allowed.has(value) ? value : fallback } catch { return fallback }
 }
+function storedValue(key: string, fallback: string) { try { return window.localStorage.getItem(key) || fallback } catch { return fallback } }
 const initialOptions: DownloadOptions = { mode: 'video', quality: 'best', container: 'mp4', audioFormat: 'mp3', audioBitrate: '192', outputRoot: '', cookieSource: 'file', quickTimeCompatible: true, quickTimeQuality: '1080' }
 const quickTimeQualities: Array<{ value: QuickTimeQuality; label: string }> = [
   { value: '1080', label: '1080p（推荐，省内存更快）' },
@@ -27,8 +29,9 @@ const formatGroups: Record<MediaFormatKind, string> = { 'video-audio': '视频�
 const formatLabel = (format: MediaFormat) => `${format.height ? `${format.height}p` : format.bitrate ? `${Math.round(format.bitrate)}kbps` : '音频'} · ${format.ext.toUpperCase()}${format.quickTimeCompatible ? ' · QuickTime' : ''}`
 const taskNames: Record<string, string> = { queued: '等待中', downloading: '下载中', skipped: '已跳过', preparing: '准备媒体', analyzing: '分析中', directing: '创意制作中', building: '生成成片中', completed: '已完成', failed: '失败', cancelled: '已取消', waiting_local: '本地等待', running: '执行中', launching: '启动浏览器', uploading: '上传中', scheduling: '设置排期', waiting_covers: '等待横竖封面', submitting: '提交中', published: '已发布', scheduled: '已排期', needs_login: '需要登录', needs_attention: '需要检查', interrupted: '已中断', partial: '部分完成' }
 const confidenceNames: Record<string, string> = { high: '高', medium: '中', low: '低' }
-const stateNames: Record<LibraryStateFilter, string> = { unprocessed: '未处理', processed: '已处理', 'awaiting-analysis': '等待分析', all: '全部' }
-const stateOrder: LibraryStateFilter[] = ['unprocessed', 'processed', 'awaiting-analysis', 'all']
+type LibraryViewFilter = LibraryStateFilter | 'remade'
+const stateNames: Record<LibraryViewFilter, string> = { unprocessed: '未处理', processed: '已处理', 'awaiting-analysis': '等待分析', remade: '已重新制作', all: '全部' }
+const stateOrder: LibraryViewFilter[] = ['unprocessed', 'processed', 'awaiting-analysis', 'remade', 'all']
 
 /* ---------------------------------------------------------------- toast */
 
@@ -336,12 +339,12 @@ const FirstFrame = memo(function FirstFrame({ asset }: { asset: MediaAsset }) {
 
 const SearchIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
 
-const AssetCard = memo(function AssetCard({ asset, selected, toggle, play, mark, publish }: { asset: MediaAsset; selected: boolean; toggle: (id: string) => void; play: (asset: MediaAsset) => void; mark: (asset: MediaAsset) => void; publish: (asset: MediaAsset) => void }) {
+const AssetCard = memo(function AssetCard({ asset, selected, remade, toggle, play, mark, publish }: { asset: MediaAsset; selected: boolean; remade: boolean; toggle: (id: string) => void; play: (asset: MediaAsset) => void; mark: (asset: MediaAsset) => void; publish: (asset: MediaAsset) => void }) {
   const analysis = asset.analysis
   return <article className={`asset-card ${selected ? 'selected' : ''}`}>
     <div className="asset-top">
       <label className="select" title={selected ? '取消选择' : '选择'}><input type="checkbox" checked={selected} onChange={() => toggle(asset.id)} aria-label={`选择 ${analysis?.title || asset.filename}`} /></label>
-      <span className={`pill ${asset.processingState}`}>{asset.processingState === 'processed' ? '已处理' : analysis ? '未处理' : '等待分析'}</span>
+      <span className="asset-badges">{remade ? <span className="pill remade">已重新制作</span> : null}<span className={`pill ${asset.processingState}`}>{asset.processingState === 'processed' ? '已处理' : analysis ? '未处理' : '等待分析'}</span></span>
     </div>
     <button className="preview" onClick={() => play(asset)} aria-label="播放预览"><FirstFrame asset={asset} />{asset.duration ? <span className="duration">{formatDuration(asset.duration)}</span> : null}</button>
     <div className="asset-copy">
@@ -362,13 +365,14 @@ const AssetCard = memo(function AssetCard({ asset, selected, toggle, play, mark,
   </article>
 })
 
-function LibraryPage({ assets, reload, openTasks }: { assets: MediaAsset[]; reload: () => void; openTasks: (taskTab: TaskTab) => void }) {
-  const [selected, setSelected] = useState<Set<string>>(new Set()), [queryInput, setQueryInput] = useState(''), [state, setState] = useState<LibraryStateFilter>('unprocessed'), [category, setCategory] = useState('all'), [directory, setDirectory] = useState('all'), [playing, setPlaying] = useState<MediaAsset>(), [publishing, setPublishing] = useState<MediaAsset[]>(), [remaking, setRemaking] = useState<MediaAsset[]>(), [deleting, setDeleting] = useState<MediaAsset[]>(), [importOpen, setImportOpen] = useState(false), [importPath, setImportPath] = useState('/downloads'), [importing, setImporting] = useState(false), [message, setMessage] = useState('')
+function LibraryPage({ assets, remakes, reload, openTasks }: { assets: MediaAsset[]; remakes: RemakeJob[]; reload: () => void; openTasks: (taskTab: TaskTab) => void }) {
+  const [selected, setSelected] = useState<Set<string>>(new Set()), [queryInput, setQueryInput] = useState(''), [state, setState] = useState<LibraryViewFilter>('unprocessed'), [category, setCategory] = useState('all'), [directory, setDirectory] = useState(() => storedValue(LIBRARY_DIRECTORY_STORAGE_KEY, 'all')), [playing, setPlaying] = useState<MediaAsset>(), [publishing, setPublishing] = useState<MediaAsset[]>(), [remaking, setRemaking] = useState<MediaAsset[]>(), [deleting, setDeleting] = useState<MediaAsset[]>(), [importOpen, setImportOpen] = useState(false), [importPath, setImportPath] = useState('/downloads'), [importing, setImporting] = useState(false), [message, setMessage] = useState('')
   const query = useDeferredValue(queryInput.trim())
   const categories = useMemo(() => [...new Set(assets.map(asset => asset.analysis?.category).filter(Boolean) as string[])].sort(), [assets])
   const directories = useMemo(() => [...new Set(assets.map(asset => mediaAssetDirectory(asset.file)))].sort(), [assets])
-  const visible = useMemo(() => filterMediaAssets(assets, state, category, query, directory), [assets, state, category, query, directory])
-  const stateCounts = useMemo(() => Object.fromEntries(stateOrder.map(value => [value, filterMediaAssets(assets, value, category, query, directory).length])) as Record<LibraryStateFilter, number>, [assets, category, query, directory])
+  const remadeAssets = useMemo(() => { const ids = new Set<string>(), files = new Set<string>(); for (const job of remakes) if (job.status === 'completed') { job.assetIds.forEach(id => ids.add(id)); job.outputs.forEach(file => files.add(file)) } return { ids, files } }, [remakes])
+  const visible = useMemo(() => { const filtered = filterMediaAssets(assets, state === 'remade' ? 'all' : state, category, query, directory); return state === 'remade' ? filtered.filter(asset => remadeAssets.ids.has(asset.id) || remadeAssets.files.has(asset.file)) : filtered }, [assets, state, category, query, directory, remadeAssets])
+  const stateCounts = useMemo(() => Object.fromEntries(stateOrder.map(value => { const filtered = filterMediaAssets(assets, value === 'remade' ? 'all' : value, category, query, directory); return [value, value === 'remade' ? filtered.filter(asset => remadeAssets.ids.has(asset.id) || remadeAssets.files.has(asset.file)).length : filtered.length] })) as Record<LibraryViewFilter, number>, [assets, category, query, directory, remadeAssets])
   const chosen = useMemo(() => assets.filter(asset => selected.has(asset.id)), [assets, selected])
   const filtered = state !== 'unprocessed' || category !== 'all' || directory !== 'all' || Boolean(query)
   useEffect(() => {
@@ -377,6 +381,8 @@ function LibraryPage({ assets, reload, openTasks }: { assets: MediaAsset[]; relo
     window.addEventListener('keydown', close)
     return () => window.removeEventListener('keydown', close)
   }, [playing])
+  useEffect(() => { try { window.localStorage.setItem(LIBRARY_DIRECTORY_STORAGE_KEY, directory) } catch { /* storage unavailable */ } }, [directory])
+  useEffect(() => { if (assets.length && directory !== 'all' && !directories.includes(directory)) setDirectory('all') }, [assets.length, directories, directory])
   const toggle = useCallback((id: string) => setSelected(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next }), [])
   const play = useCallback((asset: MediaAsset) => setPlaying(asset), [])
   const publishOne = useCallback((asset: MediaAsset) => setPublishing([asset]), [])
@@ -412,12 +418,12 @@ function LibraryPage({ assets, reload, openTasks }: { assets: MediaAsset[]; relo
         <button className="danger-text" disabled={!chosen.length} onClick={() => setDeleting(chosen)}>删除</button>
         <button disabled={!chosen.length} onClick={() => void analyze()}>分析</button>
         <button disabled={!chosen.some(asset => asset.analysis)} onClick={() => void analyze(true)}>重新分析</button>
-        <button disabled={!chosen.length} onClick={() => setRemaking(chosen)}>Hypit 重新制作{chosen.length > 1 ? ` (${chosen.length})` : ''}</button>
+        <button disabled={!chosen.length} onClick={() => setRemaking(chosen)}>重新制作{chosen.length > 1 ? ` (${chosen.length})` : ''}</button>
         <button className="primary" disabled={!chosen.length || chosen.some(asset => !asset.analysis)} title={chosen.some(asset => !asset.analysis) ? '所选视频需要先完成分析' : undefined} onClick={() => setPublishing(chosen)}>发布到抖音{chosen.length > 1 ? ` (${chosen.length})` : ''}</button>
       </div>
     </section>
     {message && !importOpen ? <p className="error">{message}</p> : null}
-    {visible.length ? <main className="asset-grid">{visible.map(asset => <AssetCard key={asset.id} asset={asset} selected={selected.has(asset.id)} toggle={toggle} play={play} mark={mark} publish={publishOne} />)}</main>
+    {visible.length ? <main className="asset-grid">{visible.map(asset => <AssetCard key={asset.id} asset={asset} selected={selected.has(asset.id)} remade={remadeAssets.ids.has(asset.id) || remadeAssets.files.has(asset.file)} toggle={toggle} play={play} mark={mark} publish={publishOne} />)}</main>
       : <section className="panel"><div className="empty">{assets.length ? <><strong>没有符合条件的视频</strong>试试切换状态、分类或目录，或清空搜索词</> : <><strong>媒体库是空的</strong>完成下载后视频会自动出现，也可以点击「导入目录」登记服务器上的文件</>}</div></section>}
     {playing ? <div className="modal-bg" role="dialog" aria-modal="true" aria-label="视频播放" onMouseDown={() => setPlaying(undefined)}><div className="modal player" onMouseDown={event => event.stopPropagation()}><button className="player-close" aria-label="关闭播放" title="关闭 (Esc)" onClick={() => setPlaying(undefined)}>×</button><h2>{playing.analysis?.title || playing.filename}</h2><video controls autoPlay src={api.library.mediaUrl(playing.id)} /><p className="filename">{playing.filename}</p></div></div> : null}
     {publishing ? <PublishDialog assets={publishing} close={() => setPublishing(undefined)} done={() => { setPublishing(undefined); openTasks('publisher') }} /> : null}
@@ -479,7 +485,7 @@ function RemakeTask({ job, reload }: { job: RemakeJob; reload: () => void }) {
     <p>{job.message}</p><p className="muted">{job.direction}</p>
     {job.outputs.length ? <p className="notice">已生成 {job.outputs.length} 个成片，并加入媒体库。</p> : null}
     {job.error ? <p className="error">{job.error}</p> : null}
-    <details className="analysis-details" open={active}><summary>制作记录（{job.logs.length} 条）</summary><div className="analysis-log" role="log">{job.logs.map((entry, index) => <div className={`analysis-log-line ${entry.level}`} key={`${entry.at}-${index}`}><time>{new Date(entry.at).toLocaleTimeString()}</time><span>{entry.message}</span></div>)}</div></details>
+    <details className="analysis-details" open={active}><summary>制作记录（{job.logs.length} 条）</summary><div className="analysis-log" role="log">{job.logs.map((entry, index) => <div className={`analysis-log-line ${entry.level}`} key={`${entry.at}-${index}`}><time>{new Date(entry.at).toLocaleTimeString()}</time><span className="analysis-stage">{analysisStageNames[entry.stage]}</span><span>{entry.message}</span></div>)}</div></details>
     <div className="row end">{active ? <button onClick={() => void api.remakes.cancel(job.id).then(reload)}>取消</button> : <button className="danger-text" onClick={() => { if (window.confirm('确认删除该 Hypit 任务记录？项目工程与已生成视频会保留。')) void api.remakes.delete(job.id).then(reload) }}>删除历史</button>}</div>
   </article>
 }
@@ -590,7 +596,7 @@ function App() {
     </header>
     <div className={tab === 'library' ? 'content library-content' : 'content'}>
       {tab === 'download' ? <DownloadPage jobs={downloads} setJobs={setDownloads} />
-        : tab === 'library' ? <LibraryPage assets={assets} reload={loadLibrary} openTasks={taskTab => { try { window.localStorage.setItem(TASK_TAB_STORAGE_KEY, taskTab) } catch { /* storage unavailable */ } setTab('tasks') }} />
+        : tab === 'library' ? <LibraryPage assets={assets} remakes={remakeJobs} reload={loadLibrary} openTasks={taskTab => { try { window.localStorage.setItem(TASK_TAB_STORAGE_KEY, taskTab) } catch { /* storage unavailable */ } setTab('tasks') }} />
         : tab === 'tasks' ? <TasksPage analysis={analysisJobs} remakes={remakeJobs} batches={batches} reload={loadTasks} />
         : <SettingsPage tools={tools} codex={codex} browser={browser} refresh={loadSettings} logout={() => void api.auth.logout().then(() => setAuthenticated(false))} />}
     </div>
