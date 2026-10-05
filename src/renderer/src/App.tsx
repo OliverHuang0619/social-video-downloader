@@ -1,7 +1,7 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type SyntheticEvent } from 'react'
 import { createPortal } from 'react-dom'
 import type { AnalysisJob, BrowserStatus, CodexConnectionPublic, CodexProviderPublic, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, CreatorSubscription, DownloadJob, DownloadOptions, HypitStatus, MediaAsset, MediaFileHash, MediaFileMetadata, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, QuickTimeQuality, RemakeJob, SubscriptionNotification, SubscriptionSchedule, ToolStatus } from '../../shared/types'
-import { automaticPlatformPublishTimes, filterMediaAssets, mediaAssetDirectory, normalizePublishTopics, type LibraryStateFilter } from '../../shared/core'
+import { automaticPlatformPublishTimes, filterMediaAssets, isRemakeMediaPath, mediaAssetDirectory, normalizePublishTopics, type LibraryStateFilter } from '../../shared/core'
 import { isCodexProviderModeSelectable, shouldShowCodexProvidersManager } from '../../shared/codex-connection-ui'
 import { DEFAULT_HYPIT_REMAKE_DIRECTION } from '../../shared/remake-direction'
 import { api, onEvent, type WorkbenchEvent } from './api'
@@ -471,10 +471,23 @@ function LibraryPage({ assets, remakes, reload, openTasks }: { assets: MediaAsse
   const [selected, setSelected] = useState<Set<string>>(new Set()), [queryInput, setQueryInput] = useState(''), [state, setState] = useState<LibraryViewFilter>('unprocessed'), [category, setCategory] = useState('all'), [directory, setDirectory] = useState(() => storedValue(LIBRARY_DIRECTORY_STORAGE_KEY, 'all')), [playing, setPlaying] = useState<MediaAsset>(), [publishing, setPublishing] = useState<MediaAsset[]>(), [remaking, setRemaking] = useState<MediaAsset[]>(), [deleting, setDeleting] = useState<MediaAsset[]>(), [importOpen, setImportOpen] = useState(false), [importPath, setImportPath] = useState('/downloads'), [importing, setImporting] = useState(false), [message, setMessage] = useState('')
   const query = useDeferredValue(queryInput.trim())
   const categories = useMemo(() => [...new Set(assets.map(asset => asset.analysis?.category).filter(Boolean) as string[])].sort(), [assets])
-  const directories = useMemo(() => [...new Set(assets.map(asset => mediaAssetDirectory(asset.file)))].sort(), [assets])
+  const sourceAssets = useMemo(() => assets.filter(asset => !isRemakeMediaPath(asset.file)), [assets])
+  const directories = useMemo(() => [...new Set(sourceAssets.map(asset => mediaAssetDirectory(asset.file)))].sort(), [sourceAssets])
   const remadeAssets = useMemo(() => { const ids = new Set<string>(), files = new Set<string>(); for (const job of remakes) if (job.status === 'completed') { job.assetIds.forEach(id => ids.add(id)); job.outputs.forEach(file => files.add(file)) } return { ids, files } }, [remakes])
-  const visible = useMemo(() => { const filtered = filterMediaAssets(assets, state === 'remade' ? 'all' : state, category, query, directory); return state === 'remade' ? filtered.filter(asset => remadeAssets.ids.has(asset.id) || remadeAssets.files.has(asset.file)) : filtered }, [assets, state, category, query, directory, remadeAssets])
-  const stateCounts = useMemo(() => Object.fromEntries(stateOrder.map(value => { const filtered = filterMediaAssets(assets, value === 'remade' ? 'all' : value, category, query, directory); return [value, value === 'remade' ? filtered.filter(asset => remadeAssets.ids.has(asset.id) || remadeAssets.files.has(asset.file)).length : filtered.length] })) as Record<LibraryViewFilter, number>, [assets, category, query, directory, remadeAssets])
+  const visible = useMemo(() => {
+    if (state === 'remade') {
+      const filtered = filterMediaAssets(assets, 'all', category, query, directory === 'all' ? 'all' : directory)
+      return filtered.filter(asset => remadeAssets.ids.has(asset.id) || remadeAssets.files.has(asset.file))
+    }
+    return filterMediaAssets(sourceAssets, state, category, query, directory)
+  }, [assets, sourceAssets, state, category, query, directory, remadeAssets])
+  const stateCounts = useMemo(() => Object.fromEntries(stateOrder.map(value => {
+    if (value === 'remade') {
+      const filtered = filterMediaAssets(assets, 'all', category, query, directory === 'all' ? 'all' : directory)
+      return [value, filtered.filter(asset => remadeAssets.ids.has(asset.id) || remadeAssets.files.has(asset.file)).length]
+    }
+    return [value, filterMediaAssets(sourceAssets, value, category, query, directory).length]
+  })) as Record<LibraryViewFilter, number>, [assets, sourceAssets, category, query, directory, remadeAssets])
   const chosen = useMemo(() => assets.filter(asset => selected.has(asset.id)), [assets, selected])
   const filtered = state !== 'unprocessed' || category !== 'all' || directory !== 'all' || Boolean(query)
   useEffect(() => {
@@ -484,7 +497,7 @@ function LibraryPage({ assets, remakes, reload, openTasks }: { assets: MediaAsse
     return () => window.removeEventListener('keydown', close)
   }, [playing])
   useEffect(() => { try { window.localStorage.setItem(LIBRARY_DIRECTORY_STORAGE_KEY, directory) } catch { /* storage unavailable */ } }, [directory])
-  useEffect(() => { if (assets.length && directory !== 'all' && !directories.includes(directory)) setDirectory('all') }, [assets.length, directories, directory])
+  useEffect(() => { if (directory !== 'all' && !directories.includes(directory)) setDirectory('all') }, [directories, directory])
   const toggle = useCallback((id: string) => setSelected(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next }), [])
   const play = useCallback((asset: MediaAsset) => setPlaying(asset), [])
   const publishOne = useCallback((asset: MediaAsset) => setPublishing([asset]), [])

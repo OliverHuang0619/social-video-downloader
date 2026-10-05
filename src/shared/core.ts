@@ -27,6 +27,11 @@ export function mediaAssetDirectory(file: string): string {
   return separator > 0 ? normalized.slice(0, separator) : '.'
 }
 
+/** Hypit remake outputs live under …/remakes/<job-id>/; hide them from the normal library directory filter. */
+export function isRemakeMediaPath(file: string): boolean {
+  return /(^|\/)remakes(\/|$)/.test(file.replace(/\\/g, '/'))
+}
+
 export function filterMediaAssets(assets: MediaAsset[], state: LibraryStateFilter, category: string, query: string, directory = 'all'): MediaAsset[] {
   const needle = query.toLocaleLowerCase()
   return assets.filter(asset =>

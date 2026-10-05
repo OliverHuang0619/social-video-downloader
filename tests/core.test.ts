@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { automaticPlatformPublishTimes, buildFormatArgs, detectPlatform, filterMediaAssets, formatsFromYtDlp, localPublishSubmissionTimes, mediaAssetDirectory, nextSafePlatformPublishTime, normalizePublishTopics, normalizeUrls, randomPublishSubmissionDelayMs, sanitizeFilename } from '../src/shared/core'
+import { automaticPlatformPublishTimes, buildFormatArgs, detectPlatform, filterMediaAssets, formatsFromYtDlp, isRemakeMediaPath, localPublishSubmissionTimes, mediaAssetDirectory, nextSafePlatformPublishTime, normalizePublishTopics, normalizeUrls, randomPublishSubmissionDelayMs, sanitizeFilename } from '../src/shared/core'
 import { buildOutputTemplate, DownloadQueue, parseDownloadOutput, parseTranscodeProgress, QUICKTIME_MAX_EDGE, quickTimeArgs, summarizeProcessError } from '../src/main/queue'
 import { classifyError, mediaFromGalleryDlLine, youtubeAttemptSources, youtubeCookieArgs } from '../src/main/media'
 import { CodexService, cleanCodexOutput, parseCodexLoginOutput, parseCodexRateLimits, resolveCodexAnalysisConfig } from '../src/server/codex'
@@ -68,6 +68,14 @@ describe('媒体库筛选', () => {
     expect(mediaAssetDirectory('C:\\downloads\\course-a\\lesson.mp4')).toBe('C:/downloads/course-a')
     expect(filterMediaAssets(assets, 'all', 'all', '', '/downloads/course-a')).toEqual([course])
     expect(filterMediaAssets(assets, 'processed', 'all', '', '/downloads/course-a/unit-2')).toEqual([nested])
+  })
+
+  it('识别 Hypit remakes 输出路径，供媒体库目录筛选排除', () => {
+    expect(isRemakeMediaPath('/downloads/remakes/bc1a49e4-1a44-47ef-ad13-2aec83c5779b/ref1-final.mp4')).toBe(true)
+    expect(isRemakeMediaPath('/downloads/remakes/cf61642a-8ac4-431b-a41d-556ba3f002e6/Run')).toBe(true)
+    expect(isRemakeMediaPath('C:\\downloads\\remakes\\job\\out.mp4')).toBe(true)
+    expect(isRemakeMediaPath('/downloads/Mindful Little Friends - Videos/clip.mp4')).toBe(false)
+    expect(isRemakeMediaPath('/downloads/practice.remakes.day/clip.mp4')).toBe(false)
   })
 })
 
