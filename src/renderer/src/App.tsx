@@ -693,11 +693,11 @@ function CodexConnectionPanel({ connection, refresh }: { connection: CodexConnec
 }
 
 function HypitSettingsPanel({ config, refresh }: { config: HypitStatus | null; refresh: () => void }) {
-  const [baseUrl, setBaseUrl] = useState(config?.baseUrl || 'https://hypit.ai')
+  const [baseUrl, setBaseUrl] = useState(config?.baseUrl || 'https://hypit.ai/v1')
   const [apiKey, setApiKey] = useState('')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
-  useEffect(() => { setBaseUrl(config?.baseUrl || 'https://hypit.ai'); setApiKey('') }, [config])
+  useEffect(() => { setBaseUrl(config?.baseUrl || 'https://hypit.ai/v1'); setApiKey('') }, [config])
   const save = async () => {
     setBusy(true); setMessage('')
     try {
@@ -727,7 +727,7 @@ function HypitSettingsPanel({ config, refresh }: { config: HypitStatus | null; r
       <button disabled={installing} onClick={() => void install()}>{installing ? '处理中…' : config?.available ? '重新检查 Hypit' : '检查并安装 Hypit'}</button>
     </div>
     <div className="codex-form-grid">
-      <label>HYPIT_BASE_URL<input value={baseUrl} onChange={event => setBaseUrl(event.target.value)} placeholder="https://hypit.ai" /></label>
+      <label>HYPIT_BASE_URL<input value={baseUrl} onChange={event => setBaseUrl(event.target.value)} placeholder="https://hypit.ai/v1" /></label>
       <label>HYPIT_API_KEY<input type="password" value={apiKey} onChange={event => setApiKey(event.target.value)} placeholder={config?.apiKeyConfigured ? config.apiKeyMasked || '已配置，留空不修改' : '粘贴 Hypit / HypiHub API Key'} /></label>
     </div>
     <p className="muted">保存后写入全局配置；新建 Hypit 任务时会自动写入工程 Runtime，并把变量注入任务进程。「生成成片」需要已配置 API Key。</p>

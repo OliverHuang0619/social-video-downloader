@@ -3,7 +3,7 @@ import path from 'node:path'
 import type { HypitConfig, HypitConfigPublic } from '../shared/types'
 import { maskApiKey } from './codex-connection'
 
-export const DEFAULT_HYPIT_BASE_URL = 'https://hypit.ai'
+export const DEFAULT_HYPIT_BASE_URL = 'https://hypit.ai/v1'
 export const HYPIT_CONFIG_FILE = 'hypit.json'
 export const HYPIT_API_KEY_ENV = 'HYPIT_API_KEY'
 export const HYPIT_BASE_URL_ENV = 'HYPIT_BASE_URL'
