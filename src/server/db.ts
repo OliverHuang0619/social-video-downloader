@@ -175,4 +175,12 @@ export class AppDatabase {
     return batches.map(row => ({ id: String(row.id), dispatchMode: row.dispatch_mode as PublishBatch['dispatchMode'], status: row.status as PublishBatch['status'], createdAt: String(row.created_at), updatedAt: String(row.updated_at), jobs: (jobsFor.all(String(row.id)) as Record<string, unknown>[]).map(job => ({ id: String(job.id), batchId: String(job.batch_id), assetId: String(job.asset_id), title: String(job.title), topics: JSON.parse(String(job.topics)), publishAt: job.publish_at ? String(job.publish_at) : undefined, executeAt: job.execute_at ? String(job.execute_at) : undefined, submitAt: job.submit_at ? String(job.submit_at) : undefined, aigc: Boolean(job.aigc), waitForCovers: Boolean(job.wait_for_covers), status: job.status as PublishJob['status'], error: job.error ? String(job.error) : undefined, screenshot: job.screenshot ? String(job.screenshot) : undefined })) }))
   }
   deletePublishBatch(id: string) { return this.sqlite.prepare("DELETE FROM publish_batches WHERE id=? AND status NOT IN ('queued','waiting_local','running')").run(id).changes > 0 }
+  clearPublishHistory() {
+    let count = 0
+    for (const batch of this.publishBatches()) {
+      if (['queued', 'waiting_local', 'running'].includes(batch.status)) continue
+      if (this.deletePublishBatch(batch.id)) count += 1
+    }
+    return count
+  }
 }

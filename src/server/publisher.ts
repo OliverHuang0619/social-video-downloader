@@ -120,6 +120,15 @@ export class PublisherService {
     await Promise.all(batch.jobs.map(job => job.screenshot ? unlink(job.screenshot).catch(() => undefined) : Promise.resolve()))
     this.changed()
   }
+  async clearHistory() {
+    const finished = this.db.publishBatches().filter(batch => !['queued', 'waiting_local', 'running'].includes(batch.status))
+    const screenshots = finished.flatMap(batch => batch.jobs.map(job => job.screenshot).filter((value): value is string => Boolean(value)))
+    const count = this.db.clearPublishHistory()
+    await Promise.all(screenshots.map(file => unlink(file).catch(() => undefined)))
+    this.db.audit('publisher.history_cleared', { count })
+    this.changed()
+    return count
+  }
   private finalizeBatchStatus(batchId: string): PublishBatch['status'] {
     const latest = this.db.publishBatches().find(value => value.id === batchId)!
     const states = [...new Set(latest.jobs.map(job => job.status))]

@@ -76,6 +76,15 @@ describe('工作台持久化与安全边界', () => {
     expect(db.deletePublishBatch('batch-active')).toBe(true)
   })
 
+  it('抖音发布已结束历史可批量清除，运行中批次保留', () => {
+    const asset = db.assets()[0], now = new Date().toISOString()
+    db.createPublishBatch({ id: 'batch-running', dispatchMode: 'local', status: 'running', createdAt: now, updatedAt: now, jobs: [{ id: 'batch-running-001', batchId: 'batch-running', assetId: asset.id, title: 'Running', topics: ['English'], aigc: true, waitForCovers: false, status: 'uploading' }] })
+    db.createPublishBatch({ id: 'batch-done', dispatchMode: 'platform', status: 'failed', createdAt: now, updatedAt: now, jobs: [{ id: 'batch-done-001', batchId: 'batch-done', assetId: asset.id, title: 'Failed', topics: ['English'], aigc: true, waitForCovers: false, status: 'failed', error: '验证码' }] })
+    expect(db.clearPublishHistory()).toBe(1)
+    expect(db.publishBatches().some(batch => batch.id === 'batch-running')).toBe(true)
+    expect(db.publishBatches().some(batch => batch.id === 'batch-done')).toBe(false)
+  })
+
   it('媒体库可批量删除所选视频，但保护正在分析或发布的视频', async () => {
     const keep = path.join(downloads, 'delete-keep.mp4'), gone = path.join(downloads, 'delete-gone.mp4'), busyFile = path.join(downloads, 'delete-busy.mp4')
     for (const file of [keep, gone, busyFile]) writeFileSync(file, 'x')

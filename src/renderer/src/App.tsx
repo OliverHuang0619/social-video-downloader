@@ -639,6 +639,7 @@ function TasksPage({ analysis, remakes, batches, assets, reload }: { analysis: A
   const [taskTab, setTaskTab] = useState<TaskTab>(() => storedChoice(TASK_TAB_STORAGE_KEY, taskTabs, 'analysis'))
   const analysisHistoryCount = analysis.filter(job => !['queued', 'preparing', 'analyzing'].includes(job.status)).length
   const remakeHistoryCount = remakes.filter(job => !['queued', 'preparing', 'directing', 'building'].includes(job.status)).length
+  const publishHistoryCount = batches.filter(batch => !['queued', 'waiting_local', 'running'].includes(batch.status)).length
   useEffect(() => { try { window.localStorage.setItem(TASK_TAB_STORAGE_KEY, taskTab) } catch { /* storage unavailable */ } }, [taskTab])
   return <section className="panel task-panel">
     <div className="task-tabs" role="tablist" aria-label="任务类型">
@@ -653,7 +654,10 @@ function TasksPage({ analysis, remakes, batches, assets, reload }: { analysis: A
     </> : taskTab === 'remake' ? <>
       <div className="task-history-actions"><span>共 <span className="data">{remakes.length}</span> 条记录，<span className="data">{remakeHistoryCount}</span> 条已结束</span><button className="danger-text" disabled={!remakeHistoryCount} onClick={() => { if (window.confirm(`确认清除全部 ${remakeHistoryCount} 条已结束的 Hypit 历史？运行中的任务、项目工程与已生成视频将保留。`)) void api.remakes.clearHistory().then(reload) }}>清除已结束的历史</button></div>
       <div className="task-list" role="tabpanel">{remakes.length ? remakes.map(job => <RemakeTask job={job} assets={assets} reload={reload} key={job.id} />) : <div className="empty"><strong>还没有重新制作任务</strong>在媒体库选择视频后点击「重新制作」</div>}</div>
-    </> : <div className="task-list" role="tabpanel">{batches.length ? batches.map(batch => <PublishBatchCard batch={batch} reload={reload} key={batch.id} />) : <div className="empty"><strong>还没有发布任务</strong>在媒体库选择已分析的视频后点击「发布到抖音」</div>}</div>}
+    </> : <>
+      <div className="task-history-actions"><span>共 <span className="data">{batches.length}</span> 条记录，<span className="data">{publishHistoryCount}</span> 条已结束</span><button className="danger-text" disabled={!publishHistoryCount} onClick={() => { if (window.confirm(`确认清除全部 ${publishHistoryCount} 条已结束的发布历史？运行中的批次会保留，已发布到抖音的作品不会撤回。`)) void api.publisher.clearHistory().then(reload) }}>清除已结束的历史</button></div>
+      <div className="task-list" role="tabpanel">{batches.length ? batches.map(batch => <PublishBatchCard batch={batch} reload={reload} key={batch.id} />) : <div className="empty"><strong>还没有发布任务</strong>在媒体库选择已分析的视频后点击「发布到抖音」</div>}</div>
+    </>}
   </section>
 }
 
