@@ -18,6 +18,8 @@ import { PublisherService } from './publisher'
 import { YoutubeCookieService } from './youtube-cookies'
 import { migrateLegacy } from './migration'
 import { RemakeService } from './remake'
+import { HypitConfigStore } from './hypit-config'
+import { HypitCliService } from './hypit-cli'
 
 type ServerEvent =
   | { type: 'tools'; event: ToolUpdateEvent }
@@ -33,7 +35,9 @@ const db = new AppDatabase(), auth = new AuthService(db), library = new LibraryS
 const reportDownloads = (jobs: ReturnType<DownloadQueue['snapshot']>) => { void library.syncDownloads(jobs).then(() => changed('library')); publish({ type: 'downloads', jobs }) }
 queue.setReporter(reportDownloads); queue.hydrate(db.downloads())
 const analysis = new AnalysisService(db, codex, () => changed('analysis')), publisher = new PublisherService(db, () => changed('publisher'))
-const remake = new RemakeService(db, library, codex, () => changed('remake'))
+const hypitConfig = new HypitConfigStore()
+const hypitCli = new HypitCliService(hypitConfig)
+const remake = new RemakeService(db, library, codex, hypitConfig, () => changed('remake'))
 const youtubeCookies = new YoutubeCookieService()
 const port = Number(process.env.PORT || 3000), host = process.env.HOST || '0.0.0.0'
 const clientDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../client')
@@ -82,6 +86,13 @@ async function api(request: IncomingMessage, response: ServerResponse, url: URL)
   const hashMatch = request.method === 'GET' && pathname.match(/^\/api\/library\/([^/]+)\/hash$/); if (hashMatch) return json(response, 200, await library.fileHash(hashMatch[1]))
   const metadataMatch = request.method === 'GET' && pathname.match(/^\/api\/library\/([^/]+)\/metadata$/); if (metadataMatch) return json(response, 200, await library.metadata(metadataMatch[1]))
   const mediaMatch = request.method === 'GET' && pathname.match(/^\/api\/library\/([^/]+)\/(media|file)$/); if (mediaMatch) return library.stream(mediaMatch[1], request.headers.range, response, mediaMatch[2] === 'file')
+  if (request.method === 'GET' && pathname === '/api/hypit/config') return json(response, 200, await hypitCli.status())
+  if (request.method === 'PUT' && pathname === '/api/hypit/config') {
+    const value = await body<{ baseUrl?: string; apiKey?: string }>(request)
+    await hypitConfig.update({ baseUrl: value.baseUrl, apiKey: value.apiKey })
+    return json(response, 200, await hypitCli.status())
+  }
+  if (request.method === 'POST' && pathname === '/api/hypit/install') return json(response, 200, await hypitCli.ensureInstalled())
   if (request.method === 'GET' && pathname === '/api/remakes') return json(response, 200, remake.list())
   if (request.method === 'POST' && pathname === '/api/remakes') { const value = await body<{ assetIds: string[]; direction: string; mode: 'editable' | 'render'; budget?: string }>(request); return json(response, 202, remake.start(Array.isArray(value.assetIds) ? value.assetIds : [], String(value.direction || ''), value.mode === 'render' ? 'render' : 'editable', value.budget)) }
   const remakeCancel = request.method === 'POST' && pathname.match(/^\/api\/remakes\/([^/]+)\/cancel$/); if (remakeCancel) { remake.cancel(remakeCancel[1]); return json(response, 200, null) }
@@ -142,7 +153,7 @@ async function api(request: IncomingMessage, response: ServerResponse, url: URL)
   return json(response, 404, { error: '接口不存在' })
 }
 
-await config.load(); await mkdir(config.get().outputRoot, { recursive: true }); await auth.initialize(); await codex.initialize(); await migrateLegacy(db, library)
+await config.load(); await mkdir(config.get().outputRoot, { recursive: true }); await auth.initialize(); await codex.initialize(); await hypitConfig.load(); await migrateLegacy(db, library)
 const server = createServer(async (request, response) => {
   try { const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`); if (url.pathname.startsWith('/remote-browser/')) { auth.require(request); request.url = `${url.pathname.slice('/remote-browser'.length) || '/'}${url.search}`; return browserProxy.web(request, response) } if (url.pathname.startsWith('/api/')) await api(request, response, url); else await staticFile(url.pathname === '/' ? '/index.html' : url.pathname, response) }
   catch (error) { json(response, (error as { statusCode?: number }).statusCode || 500, { error: error instanceof Error ? error.message : String(error) }) }

@@ -1,5 +1,5 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import type { AnalysisJob, BrowserStatus, CodexConnectionPublic, CodexProviderPublic, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, DownloadJob, DownloadOptions, MediaAsset, MediaFileHash, MediaFileMetadata, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, QuickTimeQuality, RemakeJob, ToolStatus } from '../../shared/types'
+import type { AnalysisJob, BrowserStatus, CodexConnectionPublic, CodexProviderPublic, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, DownloadJob, DownloadOptions, HypitStatus, MediaAsset, MediaFileHash, MediaFileMetadata, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, QuickTimeQuality, RemakeJob, ToolStatus } from '../../shared/types'
 import { automaticPlatformPublishTimes, filterMediaAssets, mediaAssetDirectory, normalizePublishTopics, type LibraryStateFilter } from '../../shared/core'
 import { api, onEvent, type WorkbenchEvent } from './api'
 import './styles.css'
@@ -692,7 +692,51 @@ function CodexConnectionPanel({ connection, refresh }: { connection: CodexConnec
   </div>
 }
 
-function SettingsPage({ tools, codex, browser, refresh, logout }: { tools: ToolStatus | null; codex: CodexStatus | null; browser: BrowserStatus | null; refresh: () => void; logout: () => void }) {
+function HypitSettingsPanel({ config, refresh }: { config: HypitStatus | null; refresh: () => void }) {
+  const [baseUrl, setBaseUrl] = useState(config?.baseUrl || 'https://hypit.ai')
+  const [apiKey, setApiKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  useEffect(() => { setBaseUrl(config?.baseUrl || 'https://hypit.ai'); setApiKey('') }, [config])
+  const save = async () => {
+    setBusy(true); setMessage('')
+    try {
+      await api.hypit.updateConfig({ baseUrl, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) })
+      setApiKey('')
+      setMessage('Hypit 配置已保存，将在后续新建任务中生效')
+      refresh()
+    } catch (error) { setMessage(errorText(error)) }
+    finally { setBusy(false) }
+  }
+  const install = async () => {
+    setBusy(true); setMessage('')
+    try {
+      const status = await api.hypit.install()
+      setMessage(status.message)
+      refresh()
+    } catch (error) { setMessage(errorText(error)); refresh() }
+    finally { setBusy(false) }
+  }
+  const installing = busy || Boolean(config?.busy)
+  return <div className="hypit-settings">
+    <div className="status-row"><span>Hypit CLI</span><span className={`pill ${config?.available ? 'ready' : 'failed'}`} title={config?.path || config?.packageName}>{config?.available ? shortVersion(config.version) || '已安装' : '未安装'}</span></div>
+    <div className="status-row"><span>API Key</span><span className={`pill ${config?.apiKeyConfigured ? 'ready' : 'failed'}`}>{config?.apiKeyConfigured ? '已配置' : '未配置'}</span></div>
+    <p>{config?.message || '正在检查 Hypit…'}</p>
+    {!config?.available ? <p className="muted">将通过 npm 安装 <code>{config?.packageName || '@hypit/hypit'}</code>（与 Docker 镜像版本对齐）。</p> : null}
+    <div className="row">
+      <button disabled={installing} onClick={() => void install()}>{installing ? '处理中…' : config?.available ? '重新检查 Hypit' : '检查并安装 Hypit'}</button>
+    </div>
+    <div className="codex-form-grid">
+      <label>HYPIT_BASE_URL<input value={baseUrl} onChange={event => setBaseUrl(event.target.value)} placeholder="https://hypit.ai" /></label>
+      <label>HYPIT_API_KEY<input type="password" value={apiKey} onChange={event => setApiKey(event.target.value)} placeholder={config?.apiKeyConfigured ? config.apiKeyMasked || '已配置，留空不修改' : '粘贴 Hypit / HypiHub API Key'} /></label>
+    </div>
+    <p className="muted">保存后写入全局配置；新建 Hypit 任务时会自动写入工程 Runtime，并把变量注入任务进程。「生成成片」需要已配置 API Key。</p>
+    <div className="row"><button className="primary" disabled={installing || !baseUrl.trim()} onClick={() => void save()}>{busy ? '保存中…' : '保存 Hypit 配置'}</button></div>
+    {message ? <p className={/失败|错误|需要|不可|未找到|尚未|超时/.test(message) ? 'error' : 'muted'}>{message}</p> : null}
+  </div>
+}
+
+function SettingsPage({ tools, codex, hypit, browser, refresh, logout }: { tools: ToolStatus | null; codex: CodexStatus | null; hypit: HypitStatus | null; browser: BrowserStatus | null; refresh: () => void; logout: () => void }) {
   const official = !codex || codex.mode === 'official'
   return <div className="settings-grid">
     <section className="panel settings-section">
@@ -715,6 +759,11 @@ function SettingsPage({ tools, codex, browser, refresh, logout }: { tools: ToolS
       {!official ? <p className="muted">当前为非官方模式，设备码登录已禁用。切换回「官方 ChatGPT」可恢复登录态（不会因切换丢失）。</p> : null}
     </section>
     <section className="panel settings-section">
+      <h2>Hypit 生成服务</h2>
+      <p>检查 Hypit CLI，并配置 HypiHub / Hypit 的 Base URL 与 API Key，供重新制作「生成成片」使用。</p>
+      <HypitSettingsPanel config={hypit} refresh={refresh} />
+    </section>
+    <section className="panel settings-section">
       <h2>抖音浏览器</h2>
       <p>{browser?.message || '正在检查…'}</p>
       <div className="row"><a className="button" target="_blank" rel="noreferrer" href={browser?.remoteUrl || '/remote-browser/vnc.html?autoconnect=1&resize=scale'}>{browser?.mode === 'host' ? '打开本地浏览器' : '打开远程浏览器'}</a><button className="primary" disabled={!browser?.ready} onClick={() => void api.publisher.login().then(refresh)}>登录抖音</button></div>
@@ -730,10 +779,10 @@ function SettingsPage({ tools, codex, browser, refresh, logout }: { tools: ToolS
 /* ------------------------------------------------------------------ app */
 
 function App() {
-  const [authenticated, setAuthenticated] = useState<boolean | null>(null), [tab, setTab] = useState<Tab>(() => storedChoice(NAVIGATION_STORAGE_KEY, tabs, 'download')), [assets, setAssets] = useState<MediaAsset[]>([]), [analysisJobs, setAnalysisJobs] = useState<AnalysisJob[]>([]), [remakeJobs, setRemakeJobs] = useState<RemakeJob[]>([]), [batches, setBatches] = useState<PublishBatch[]>([]), [downloads, setDownloads] = useState<DownloadJob[]>([]), [tools, setTools] = useState<ToolStatus | null>(null), [codex, setCodex] = useState<CodexStatus | null>(null), [browser, setBrowser] = useState<BrowserStatus | null>(null)
+  const [authenticated, setAuthenticated] = useState<boolean | null>(null), [tab, setTab] = useState<Tab>(() => storedChoice(NAVIGATION_STORAGE_KEY, tabs, 'download')), [assets, setAssets] = useState<MediaAsset[]>([]), [analysisJobs, setAnalysisJobs] = useState<AnalysisJob[]>([]), [remakeJobs, setRemakeJobs] = useState<RemakeJob[]>([]), [batches, setBatches] = useState<PublishBatch[]>([]), [downloads, setDownloads] = useState<DownloadJob[]>([]), [tools, setTools] = useState<ToolStatus | null>(null), [codex, setCodex] = useState<CodexStatus | null>(null), [hypit, setHypit] = useState<HypitStatus | null>(null), [browser, setBrowser] = useState<BrowserStatus | null>(null)
   const loadLibrary = useCallback(() => { void api.library.list().then(setAssets) }, [])
   const loadTasks = useCallback(() => { void Promise.all([api.analysis.list(), api.remakes.list(), api.publisher.jobs()]).then(([a, r, p]) => { setAnalysisJobs(a); setRemakeJobs(r); setBatches(p) }) }, [])
-  const loadSettings = useCallback(() => { void Promise.all([api.tools.status(), api.codex.status(), api.publisher.status()]).then(([t, c, b]) => { setTools(t); setCodex(c); setBrowser(b) }) }, [])
+  const loadSettings = useCallback(() => { void Promise.all([api.tools.status(), api.codex.status(), api.hypit.config(), api.publisher.status()]).then(([t, c, h, b]) => { setTools(t); setCodex(c); setHypit(h); setBrowser(b) }) }, [])
   useEffect(() => { void api.auth.session().then(value => setAuthenticated(value.authenticated)).catch(() => setAuthenticated(false)) }, [])
   useEffect(() => { try { window.localStorage.setItem(NAVIGATION_STORAGE_KEY, tab) } catch { /* storage unavailable */ } }, [tab])
   useEffect(() => { if (!authenticated) return; loadLibrary(); loadTasks(); loadSettings(); return onEvent(raw => { const event = raw as WorkbenchEvent; if (event.type === 'library') loadLibrary(); if (event.type === 'analysis' || event.type === 'remake' || event.type === 'publisher') { loadLibrary(); loadTasks() } if (event.type === 'codex') loadSettings() }) }, [authenticated, loadLibrary, loadSettings, loadTasks])
@@ -762,7 +811,7 @@ function App() {
       {tab === 'download' ? <DownloadPage jobs={downloads} setJobs={setDownloads} />
         : tab === 'library' ? <LibraryPage assets={assets} remakes={remakeJobs} reload={loadLibrary} openTasks={taskTab => { try { window.localStorage.setItem(TASK_TAB_STORAGE_KEY, taskTab) } catch { /* storage unavailable */ } setTab('tasks') }} />
         : tab === 'tasks' ? <TasksPage analysis={analysisJobs} remakes={remakeJobs} batches={batches} assets={assets} reload={loadTasks} />
-        : <SettingsPage tools={tools} codex={codex} browser={browser} refresh={loadSettings} logout={() => void api.auth.logout().then(() => setAuthenticated(false))} />}
+        : <SettingsPage tools={tools} codex={codex} hypit={hypit} browser={browser} refresh={loadSettings} logout={() => void api.auth.logout().then(() => setAuthenticated(false))} />}
     </div>
     <Toaster />
   </div>

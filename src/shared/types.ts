@@ -199,6 +199,25 @@ export interface CodexConnectionPublic {
   providers: CodexProviderPublic[]
 }
 export interface CodexConnectionTestResult { ok: boolean; message: string }
+export interface HypitConfig {
+  baseUrl: string
+  apiKey: string
+}
+export interface HypitConfigPublic {
+  baseUrl: string
+  apiKeyMasked: string
+  apiKeyConfigured: boolean
+}
+export interface HypitStatus extends HypitConfigPublic {
+  available: boolean
+  version?: string
+  path?: string
+  packageName: string
+  busy: boolean
+  message: string
+  skillFile?: string
+  skillAvailable: boolean
+}
 export interface CodexStatus {
   available: boolean
   authenticated: boolean

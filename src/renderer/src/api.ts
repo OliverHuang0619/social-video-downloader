@@ -1,4 +1,4 @@
-import type { AnalysisJob, AuthStatus, BrowserStatus, CodexConnectionPublic, CodexConnectionTestResult, CodexProviderPublic, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, DownloadJob, MediaAsset, MediaFileHash, MediaFileMetadata, PublishBatch, RemakeJob, ScanEvent, ToolStatus, ToolUpdateEvent } from '../../shared/types'
+import type { AnalysisJob, AuthStatus, BrowserStatus, CodexConnectionPublic, CodexConnectionTestResult, CodexProviderPublic, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, DownloadJob, HypitStatus, MediaAsset, MediaFileHash, MediaFileMetadata, PublishBatch, RemakeJob, ScanEvent, ToolStatus, ToolUpdateEvent } from '../../shared/types'
 
 let csrfToken = ''
 let events: EventSource | undefined
@@ -43,6 +43,11 @@ export const api = {
   },
   analysis: { list: () => request<AnalysisJob[]>('/api/analysis/jobs'), start: (assetIds: string[], force = false) => post<AnalysisJob>('/api/analysis/jobs', { assetIds, force }), cancel: (id: string) => post<void>(`/api/analysis/jobs/${id}/cancel`), retry: (id: string) => post<AnalysisJob>(`/api/analysis/jobs/${id}/retry`), delete: (id: string) => request<void>(`/api/analysis/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' }), clearHistory: () => request<{ count: number }>('/api/analysis/jobs', { method: 'DELETE' }) },
   remakes: { list: () => request<RemakeJob[]>('/api/remakes'), start: (assetIds: string[], direction: string, mode: RemakeJob['mode'], budget?: string) => post<RemakeJob>('/api/remakes', { assetIds, direction, mode, budget }), cancel: (id: string) => post<void>(`/api/remakes/${encodeURIComponent(id)}/cancel`), delete: (id: string) => request<void>(`/api/remakes/${encodeURIComponent(id)}`, { method: 'DELETE' }) },
+  hypit: {
+    config: () => request<HypitStatus>('/api/hypit/config'),
+    updateConfig: (value: { baseUrl?: string; apiKey?: string }) => request<HypitStatus>('/api/hypit/config', { method: 'PUT', body: JSON.stringify(value) }),
+    install: () => post<HypitStatus>('/api/hypit/install'),
+  },
   codex: {
     status: () => request<CodexStatus>('/api/codex/status'),
     login: () => post<CodexStatus>('/api/codex/login'),

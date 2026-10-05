@@ -97,11 +97,11 @@ BIND_ADDRESS=0.0.0.0 docker compose up -d
 1. 在“下载”页解析链接并创建下载任务。
 2. 下载完成后，文件自动进入“媒体库”。也可导入 `/downloads` 或 `/imports` 中的目录。
 3. 在媒体库选择视频并点击“分析”；已有结果需要显式点击“重新分析”。
-4. 需要原创改编时点击“Hypit 重新制作”，填写创意方向。默认只建立原创方案与可编辑工程，不产生付费生成；生成成片必须明确填写预算或免费额度范围。
+4. 需要原创改编时点击“Hypit 重新制作”，填写创意方向。默认只建立原创方案与可编辑工程，不产生付费生成；生成成片必须明确填写预算或免费额度范围，并先在设置页配置 Hypit。
 5. 审核标题、话题和摘要，选择单个或多个视频发布到抖音。
 6. 在“任务”页查看分析、Hypit 制作和发布进度。
 
-Docker 镜像内置 Hypit CLI 与技能。Hypit 工程持久保存在 `config/hypit-projects`，成片写入 `downloads/remakes` 并自动进入媒体库。实际生成能力仍取决于 Hypit Profile、Provider 与凭据配置；安装 CLI 本身不附带模型账号或额度。本地开发若技能不在默认容器路径，可用 `SVD_HYPIT_SKILL_FILE=/绝对路径/SKILL.md` 指定。
+Docker 镜像内置 Hypit CLI 与技能。Hypit 工程持久保存在 `config/hypit-projects`，成片写入 `downloads/remakes` 并自动进入媒体库。设置页「Hypit 生成服务」可检查/安装 Hypit CLI（缺失时通过 npm 安装与镜像同版本的 `@hypit/hypit`），并配置 `HYPIT_BASE_URL` 与 `HYPIT_API_KEY`（落盘于 `config/hypit.json`）；新建重新制作任务会自动写入工程 Runtime，并把变量注入任务进程。安装 CLI 本身不附带模型账号或额度。本地开发若技能不在默认容器路径，可用 `SVD_HYPIT_SKILL_FILE=/绝对路径/SKILL.md` 指定。
 
 真实发布前始终会出现最终确认。平台排期需至少提前 2 小时且不超过 7 天；本地定时至少提前 1 分钟，并要求服务持续运行。
 
