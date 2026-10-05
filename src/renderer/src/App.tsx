@@ -485,7 +485,16 @@ function LibraryPage({ assets, remakes, reload, openTasks }: { assets: MediaAsse
 
 const analysisStageNames = { queue: '队列', prepare: '媒体', codex: 'Codex', validate: '校验', complete: '完成' }
 
-function AnalysisTask({ job, reload }: { job: AnalysisJob; reload: () => void }) {
+function TaskSourceVideos({ assetIds, assets }: { assetIds: string[]; assets: MediaAsset[] }) {
+  const originals = useMemo(() => {
+    const byId = new Map(assets.map(asset => [asset.id, asset]))
+    return assetIds.map(id => byId.get(id)).filter((asset): asset is MediaAsset => Boolean(asset))
+  }, [assetIds, assets])
+  if (!originals.length) return null
+  return <div className="remake-sources"><p className="remake-sources-label">原始视频</p><ul className="remake-source-list">{originals.map(asset => <li className="remake-source-item" key={asset.id}><div className="remake-source-thumb" aria-hidden="true"><FirstFrame asset={asset} /></div><div className="remake-source-meta"><strong title={assetTitle(asset)}>{assetTitle(asset)}</strong><span>{asset.uploader || '未知作者'} · <span className="data">{formatDuration(asset.duration)}</span> · {asset.filename}</span></div></li>)}</ul></div>
+}
+
+function AnalysisTask({ job, assets, reload }: { job: AnalysisJob; assets: MediaAsset[]; reload: () => void }) {
   const active = ['preparing', 'analyzing', 'queued'].includes(job.status)
   const logs = job.logs || [], visibleLogs = logs.slice(-100), totalItems = job.totalItems || job.assetIds.length
   const logRef = useRef<HTMLDivElement>(null)
@@ -493,6 +502,7 @@ function AnalysisTask({ job, reload }: { job: AnalysisJob; reload: () => void })
   return <article className="task analysis-task">
     <div className="row between"><span className="task-title">{job.assetIds.length} 个视频 <span className="data muted">· {job.id.slice(0, 8)}</span></span><span className={`pill ${job.status}`}>{taskNames[job.status] || job.status}</span></div>
     <div className={`progress ${job.status === 'completed' ? 'done' : job.status === 'failed' ? 'bad' : ''}`}><i style={{ width: `${job.progress}%` }} /></div>
+    <TaskSourceVideos assetIds={job.assetIds} assets={assets} />
     <div className="analysis-summary"><span>{Math.round(job.progress)}%</span><span>{job.processedItems || 0}/{totalItems} 个媒体已准备</span><TaskElapsed createdAt={job.createdAt} updatedAt={job.updatedAt} active={active} /><span>更新于 {new Date(job.updatedAt).toLocaleTimeString()}</span></div>
     <p>{job.message}</p>
     {job.currentItem ? <p className="analysis-current" title={job.currentItem}>当前文件：{job.currentItem}</p> : null}
@@ -629,7 +639,7 @@ function RemakeTask({ job, assets, reload }: { job: RemakeJob; assets: MediaAsse
   return <article className="task analysis-task">
     <div className="row between"><span className="task-title">{job.assetIds.length} 个视频 · {job.mode === 'render' ? '生成成片' : '可编辑工程'} <span className="data muted">· {job.id.slice(0, 8)}</span></span><span className="row"><TaskElapsed createdAt={job.createdAt} updatedAt={job.updatedAt} active={active} /><span className={`pill ${job.status}`}>{taskNames[job.status] || job.status}</span></span></div>
     <div className={`progress ${job.status === 'completed' ? 'done' : job.status === 'failed' ? 'bad' : ''}`}><i style={{ width: `${job.progress}%` }} /></div>
-    {originals.length ? <div className="remake-sources"><p className="remake-sources-label">原始视频</p><ul className="remake-source-list">{originals.map(asset => <li className="remake-source-item" key={asset.id}><div className="remake-source-thumb" aria-hidden="true"><FirstFrame asset={asset} /></div><div className="remake-source-meta"><strong title={assetTitle(asset)}>{assetTitle(asset)}</strong><span>{asset.uploader || '未知作者'} · <span className="data">{formatDuration(asset.duration)}</span> · {asset.filename}</span></div></li>)}</ul></div> : null}
+    <TaskSourceVideos assetIds={job.assetIds} assets={assets} />
     <p>{job.message}</p><p className="muted">{job.direction}</p>
     {job.outputs.length ? <p className="notice">已生成 {job.outputs.length} 个成片，并加入媒体库。</p> : null}
     {job.error ? <p className="error">{job.error}</p> : null}
@@ -654,7 +664,7 @@ function TasksPage({ analysis, remakes, batches, assets, reload }: { analysis: A
     </div>
     {taskTab === 'analysis' ? <>
       <div className="task-history-actions"><span>共 <span className="data">{analysis.length}</span> 条记录，<span className="data">{analysisHistoryCount}</span> 条已结束</span><button className="danger-text" disabled={!analysisHistoryCount} onClick={() => { if (window.confirm(`确认清除全部 ${analysisHistoryCount} 条已结束的分析历史？运行中的任务和媒体库分析结果将保留。`)) void api.analysis.clearHistory().then(reload) }}>清除已结束的历史</button></div>
-      <div className="task-list" role="tabpanel">{analysis.length ? analysis.map(job => <AnalysisTask job={job} reload={reload} key={job.id} />) : <div className="empty"><strong>还没有分析任务</strong>在媒体库勾选视频后点击「分析」</div>}</div>
+      <div className="task-list" role="tabpanel">{analysis.length ? analysis.map(job => <AnalysisTask job={job} assets={assets} reload={reload} key={job.id} />) : <div className="empty"><strong>还没有分析任务</strong>在媒体库勾选视频后点击「分析」</div>}</div>
     </> : taskTab === 'remake' ? <>
       <div className="task-history-actions"><span>共 <span className="data">{remakes.length}</span> 条记录，<span className="data">{remakeHistoryCount}</span> 条已结束</span><button className="danger-text" disabled={!remakeHistoryCount} onClick={() => { if (window.confirm(`确认清除全部 ${remakeHistoryCount} 条已结束的 Hypit 历史？运行中的任务、项目工程与已生成视频将保留。`)) void api.remakes.clearHistory().then(reload) }}>清除已结束的历史</button></div>
       <div className="task-list" role="tabpanel">{remakes.length ? remakes.map(job => <RemakeTask job={job} assets={assets} reload={reload} key={job.id} />) : <div className="empty"><strong>还没有重新制作任务</strong>在媒体库选择视频后点击「重新制作」</div>}</div>
