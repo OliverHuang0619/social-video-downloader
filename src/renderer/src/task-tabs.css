@@ -1,7 +1,8 @@
 /* 任务页：分析任务 / 抖音发布任务 切换 */
 
 .task-panel {
-  overflow: hidden;
+  /* Keep tab chrome clipped without trapping portaled/fixed dialogs. */
+  overflow: clip;
 }
 
 .task-tabs {

@@ -1,4 +1,5 @@
-import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type SyntheticEvent } from 'react'
+import { createPortal } from 'react-dom'
 import type { AnalysisJob, BrowserStatus, CodexConnectionPublic, CodexProviderPublic, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, DownloadJob, DownloadOptions, HypitStatus, MediaAsset, MediaFileHash, MediaFileMetadata, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, QuickTimeQuality, RemakeJob, ToolStatus } from '../../shared/types'
 import { automaticPlatformPublishTimes, filterMediaAssets, mediaAssetDirectory, normalizePublishTopics, type LibraryStateFilter } from '../../shared/core'
 import { api, onEvent, type WorkbenchEvent } from './api'
@@ -490,28 +491,96 @@ function PublishBatchCard({ batch, reload }: { batch: PublishBatch; reload: () =
   </article>
 }
 
+function preferRemadeAsset(assets: MediaAsset[]) {
+  const rank = (asset: MediaAsset) => {
+    const name = asset.filename.toLowerCase()
+    if (/(^|\/)final(?:[-_.].*)?\.mp4$/.test(name) || name === 'final.mp4') return 0
+    if (name.includes('final-720') || name.includes('720x1280')) return 1
+    if (name.includes('combined')) return 2
+    if (name.startsWith('seg')) return 9
+    return 5
+  }
+  return [...assets].sort((a, b) => rank(a) - rank(b) || a.filename.localeCompare(b.filename))
+}
+
 function CompareDialog({ originals, remade, close }: { originals: MediaAsset[]; remade: MediaAsset[]; close: () => void }) {
-  const [originalId, setOriginalId] = useState(originals[0]?.id || ''), [remadeId, setRemadeId] = useState(remade[0]?.id || ''), [hashes, setHashes] = useState<Record<string, MediaFileHash | 'loading' | 'error'>>({}), [durations, setDurations] = useState<Record<string, number>>({}), [playing, setPlaying] = useState(false)
+  const remadeOptions = useMemo(() => preferRemadeAsset(remade), [remade])
+  const [originalId, setOriginalId] = useState(() => originals[0]?.id || '')
+  const [remadeId, setRemadeId] = useState(() => remadeOptions[0]?.id || '')
+  const [hashes, setHashes] = useState<Record<string, MediaFileHash | 'loading' | 'error'>>({})
+  const [durations, setDurations] = useState<Record<string, number>>({})
+  const [playing, setPlaying] = useState(false)
   const left = useRef<HTMLVideoElement>(null), right = useRef<HTMLVideoElement>(null)
-  const original = originals.find(asset => asset.id === originalId), output = remade.find(asset => asset.id === remadeId)
-  useEffect(() => { for (const id of [originalId, remadeId]) if (id && !hashes[id]) { setHashes(current => ({ ...current, [id]: 'loading' })); void api.library.hash(id).then(value => setHashes(current => ({ ...current, [id]: value }))).catch(() => setHashes(current => ({ ...current, [id]: 'error' }))) } }, [originalId, remadeId, hashes])
+  const original = originals.find(asset => asset.id === originalId) || originals[0]
+  const output = remadeOptions.find(asset => asset.id === remadeId) || remadeOptions[0]
+  const rememberDuration = (id: string, event: SyntheticEvent<HTMLVideoElement>) => {
+    const element = event.currentTarget ?? (event.target instanceof HTMLVideoElement ? event.target : null)
+    const seconds = element?.duration
+    if (!id || seconds == null || !Number.isFinite(seconds) || seconds <= 0) return
+    setDurations(current => current[id] === seconds ? current : { ...current, [id]: seconds })
+  }
+  useEffect(() => {
+    if (original && original.id !== originalId) setOriginalId(original.id)
+  }, [original, originalId])
+  useEffect(() => {
+    if (output && output.id !== remadeId) setRemadeId(output.id)
+  }, [output, remadeId])
+  useEffect(() => {
+    for (const id of [original?.id, output?.id]) {
+      if (!id) continue
+      setHashes(current => {
+        if (current[id]) return current
+        void api.library.hash(id).then(value => setHashes(prev => ({ ...prev, [id]: value }))).catch(() => setHashes(prev => ({ ...prev, [id]: 'error' })))
+        return { ...current, [id]: 'loading' }
+      })
+    }
+  }, [original?.id, output?.id])
   useEffect(() => { setPlaying(false) }, [originalId, remadeId])
-  const playBoth = async () => { if (!left.current || !right.current) return; right.current.currentTime = Math.min(left.current.currentTime, right.current.duration || left.current.currentTime); const results = await Promise.allSettled([left.current.play(), right.current.play()]); setPlaying(results.some(result => result.status === 'fulfilled')) }
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') close() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [close])
+  const playBoth = async () => {
+    const a = left.current, b = right.current
+    if (!a || !b) return
+    const rightDuration = Number.isFinite(b.duration) ? b.duration : a.currentTime
+    b.currentTime = Math.min(a.currentTime, rightDuration)
+    const results = await Promise.allSettled([a.play(), b.play()])
+    setPlaying(results.some(result => result.status === 'fulfilled'))
+  }
   const pauseBoth = () => { left.current?.pause(); right.current?.pause(); setPlaying(false) }
   const resetBoth = () => { pauseBoth(); if (left.current) left.current.currentTime = 0; if (right.current) right.current.currentTime = 0 }
-  const syncRight = () => { if (!left.current || !right.current || !Number.isFinite(right.current.duration)) return; const target = Math.min(left.current.currentTime, right.current.duration); if (Math.abs(right.current.currentTime - target) > .3) right.current.currentTime = target }
-  const hashView = (asset?: MediaAsset) => { const value = asset ? hashes[asset.id] : undefined, duration = asset ? durations[asset.id] ?? asset.duration : undefined; return <><div className="compare-file-meta"><span>大小<strong>{typeof value === 'object' ? formatBytes(value.size) : value === 'error' ? '读取失败' : '读取中…'}</strong></span><span>时长<strong>{duration ? formatDuration(duration) : '读取中…'}</strong></span></div><div className="compare-hash"><span>SHA-256</span><code title={typeof value === 'object' ? value.hash : undefined}>{value === 'loading' || !value ? '计算中…' : value === 'error' ? '计算失败' : value.hash}</code>{typeof value === 'object' ? <small>文件修改于 {new Date(value.modifiedAt).toLocaleString()}</small> : null}</div></> }
-  return <div className="modal-bg" role="dialog" aria-modal="true" aria-label="原视频与重新制作视频对比" onMouseDown={close}>
+  const syncRight = () => {
+    const a = left.current, b = right.current
+    if (!a || !b || !Number.isFinite(b.duration)) return
+    const target = Math.min(a.currentTime, b.duration)
+    if (Math.abs(b.currentTime - target) > .3) b.currentTime = target
+  }
+  const hashView = (asset?: MediaAsset) => {
+    if (!asset) return <div className="compare-hash"><span>文件</span><code>未找到可对比媒体</code></div>
+    const value = hashes[asset.id], duration = durations[asset.id] ?? asset.duration
+    return <><div className="compare-file-meta"><span>大小<strong>{typeof value === 'object' ? formatBytes(value.size) : value === 'error' ? '读取失败' : '读取中…'}</strong></span><span>时长<strong>{duration ? formatDuration(duration) : '读取中…'}</strong></span></div><div className="compare-hash"><span>SHA-256</span><code title={typeof value === 'object' ? value.hash : undefined}>{value === 'loading' || !value ? '计算中…' : value === 'error' ? '计算失败' : value.hash}</code>{typeof value === 'object' ? <small>文件修改于 {new Date(value.modifiedAt).toLocaleString()}</small> : null}</div></>
+  }
+  return createPortal(<div className="modal-bg" role="dialog" aria-modal="true" aria-label="原视频与重新制作视频对比" onMouseDown={close}>
     <div className="modal compare-modal" onMouseDown={event => event.stopPropagation()}>
       <div className="modal-head"><h2>视频前后对比</h2><p>使用统一控制同时播放；拖动左侧视频进度时，右侧会同步到相同时间。</p></div>
       <div className="compare-toolbar"><button className="primary" onClick={() => void (playing ? pauseBoth() : playBoth())}>{playing ? '同时暂停' : '同时播放'}</button><button onClick={resetBoth}>回到开头</button></div>
       <div className="compare-grid">
-        <section><div className="compare-title"><strong>原视频</strong><select value={originalId} onChange={event => setOriginalId(event.target.value)}>{originals.map(asset => <option value={asset.id} key={asset.id}>{asset.analysis?.title || asset.filename}</option>)}</select></div>{original ? <video ref={left} playsInline src={api.library.mediaUrl(original.id)} onLoadedMetadata={event => setDurations(current => ({ ...current, [original.id]: event.currentTarget.duration }))} onPlay={() => void playBoth()} onPause={pauseBoth} onSeeked={syncRight} onTimeUpdate={syncRight} onEnded={pauseBoth} /> : null}{hashView(original)}</section>
-        <section><div className="compare-title"><strong>重新制作后</strong><select value={remadeId} onChange={event => setRemadeId(event.target.value)}>{remade.map(asset => <option value={asset.id} key={asset.id}>{asset.analysis?.title || asset.filename}</option>)}</select></div>{output ? <video ref={right} playsInline src={api.library.mediaUrl(output.id)} onLoadedMetadata={event => setDurations(current => ({ ...current, [output.id]: event.currentTarget.duration }))} onEnded={pauseBoth} /> : null}{hashView(output)}</section>
+        <section>
+          <div className="compare-title"><strong>原视频</strong><select value={original?.id || ''} onChange={event => setOriginalId(event.target.value)}>{originals.map(asset => <option value={asset.id} key={asset.id}>{asset.analysis?.title || asset.filename}</option>)}</select></div>
+          {original ? <video key={original.id} ref={left} playsInline controls preload="metadata" src={api.library.mediaUrl(original.id)} onLoadedMetadata={event => rememberDuration(original.id, event)} onPlay={() => void playBoth()} onPause={pauseBoth} onSeeked={syncRight} onTimeUpdate={syncRight} onEnded={pauseBoth} /> : <p className="muted">未找到原视频</p>}
+          {hashView(original)}
+        </section>
+        <section>
+          <div className="compare-title"><strong>重新制作后</strong><select value={output?.id || ''} onChange={event => setRemadeId(event.target.value)}>{remadeOptions.map(asset => <option value={asset.id} key={asset.id}>{asset.filename}</option>)}</select></div>
+          {output ? <video key={output.id} ref={right} playsInline controls preload="metadata" src={api.library.mediaUrl(output.id)} onLoadedMetadata={event => rememberDuration(output.id, event)} onEnded={pauseBoth} /> : <p className="muted">未找到成片</p>}
+          {hashView(output)}
+        </section>
       </div>
       <div className="modal-foot"><button onClick={close}>关闭</button></div>
     </div>
-  </div>
+  </div>, document.body)
 }
 
 function RemakeTask({ job, assets, reload }: { job: RemakeJob; assets: MediaAsset[]; reload: () => void }) {
