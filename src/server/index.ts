@@ -95,7 +95,9 @@ async function api(request: IncomingMessage, response: ServerResponse, url: URL)
   if (request.method === 'POST' && pathname === '/api/hypit/install') return json(response, 200, await hypitCli.ensureInstalled())
   if (request.method === 'GET' && pathname === '/api/remakes') return json(response, 200, remake.list())
   if (request.method === 'POST' && pathname === '/api/remakes') { const value = await body<{ assetIds: string[]; direction: string; mode: 'editable' | 'render'; budget?: string }>(request); return json(response, 202, remake.start(Array.isArray(value.assetIds) ? value.assetIds : [], String(value.direction || ''), value.mode === 'render' ? 'render' : 'editable', value.budget)) }
+  if (request.method === 'DELETE' && pathname === '/api/remakes') return json(response, 200, { count: remake.clearHistory() })
   const remakeCancel = request.method === 'POST' && pathname.match(/^\/api\/remakes\/([^/]+)\/cancel$/); if (remakeCancel) { remake.cancel(remakeCancel[1]); return json(response, 200, null) }
+  const remakeRetry = request.method === 'POST' && pathname.match(/^\/api\/remakes\/([^/]+)\/retry$/); if (remakeRetry) return json(response, 202, remake.retry(remakeRetry[1]))
   const remakeDelete = request.method === 'DELETE' && pathname.match(/^\/api\/remakes\/([^/]+)$/); if (remakeDelete) { remake.delete(remakeDelete[1]); return json(response, 200, null) }
   if (request.method === 'GET' && pathname === '/api/analysis/jobs') return json(response, 200, db.analyses())
   if (request.method === 'POST' && pathname === '/api/analysis/jobs') { const value = await body<{ assetIds: string[]; force?: boolean }>(request); return json(response, 202, analysis.start(value.assetIds, value.force)) }

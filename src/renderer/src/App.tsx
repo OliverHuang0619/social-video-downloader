@@ -2,6 +2,7 @@ import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom'
 import type { AnalysisJob, BrowserStatus, CodexConnectionPublic, CodexProviderPublic, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, DownloadJob, DownloadOptions, HypitStatus, MediaAsset, MediaFileHash, MediaFileMetadata, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, QuickTimeQuality, RemakeJob, ToolStatus } from '../../shared/types'
 import { automaticPlatformPublishTimes, filterMediaAssets, mediaAssetDirectory, normalizePublishTopics, type LibraryStateFilter } from '../../shared/core'
+import { DEFAULT_HYPIT_REMAKE_DIRECTION } from '../../shared/remake-direction'
 import { api, onEvent, type WorkbenchEvent } from './api'
 import './styles.css'
 import './task-tabs.css'
@@ -305,10 +306,10 @@ function PublishDialog({ assets, close, done }: { assets: MediaAsset[]; close: (
 /* -------------------------------------------------------------- library */
 
 function RemakeDialog({ assets, close, done }: { assets: MediaAsset[]; close: () => void; done: () => void }) {
-  const [direction, setDirection] = useState('保留核心信息与吸引人的节奏，重新设计脚本、画面、声音与包装，制作面向短视频平台的原创版本。')
+  const [direction, setDirection] = useState(DEFAULT_HYPIT_REMAKE_DIRECTION)
   const [mode, setMode] = useState<RemakeJob['mode']>('editable'), [budget, setBudget] = useState(''), [busy, setBusy] = useState(false), [message, setMessage] = useState('')
   const submit = async () => {
-    if (direction.trim().length < 6) return setMessage('请补充原创改编方向')
+    if (direction.trim().length < 6) return setMessage('请补充翻拍制作要求')
     if (mode === 'render' && !budget.trim()) return setMessage('生成成片前，请填写可接受的预算或免费额度范围')
     setBusy(true); setMessage('')
     try { await api.remakes.start(assets.map(asset => asset.id), direction, mode, budget); toast(`已创建 ${assets.length} 个视频的 Hypit 重新制作任务`); done() }
@@ -316,18 +317,18 @@ function RemakeDialog({ assets, close, done }: { assets: MediaAsset[]; close: ()
   }
   return <div className="modal-bg" role="dialog" aria-modal="true" aria-label="使用 Hypit 重新制作" onMouseDown={() => { if (!busy) close() }}>
     <div className="modal remake-modal" onMouseDown={event => event.stopPropagation()}>
-      <div className="modal-head"><h2>使用 Hypit 重新制作</h2><p>{assets.length} 个参考视频将分别建立原创制作工程，原文件不会被覆盖。</p></div>
-      <label>原创改编方向<textarea rows={5} value={direction} onChange={event => setDirection(event.target.value)} placeholder="例如：改成轻松幽默的英文启蒙短片，重写旁白，使用全新的角色、场景与配乐…" /></label>
+      <div className="modal-head"><h2>使用 Hypit 重新制作</h2><p>{assets.length} 个参考视频将分别建立翻拍工程，默认高度还原情节、风格与节奏；原文件不会被覆盖。</p></div>
+      <label>翻拍制作要求<textarea rows={10} value={direction} onChange={event => setDirection(event.target.value)} placeholder="描述要如何参考原片进行高度还原翻拍…" /></label>
       <fieldset className="remake-modes"><legend>制作范围</legend>
         <div className="remake-mode-grid">
-          <label className={`remake-mode ${mode === 'editable' ? 'selected' : ''}`}><input type="radio" name="remake-mode" checked={mode === 'editable'} onChange={() => setMode('editable')} /><span><strong>可编辑工程</strong><small>先完成原创方案和完整工程，不使用付费生成</small></span><em>推荐</em></label>
+          <label className={`remake-mode ${mode === 'editable' ? 'selected' : ''}`}><input type="radio" name="remake-mode" checked={mode === 'editable'} onChange={() => setMode('editable')} /><span><strong>可编辑工程</strong><small>先完成翻拍方案与完整工程，不使用付费生成</small></span><em>推荐</em></label>
           <label className={`remake-mode ${mode === 'render' ? 'selected' : ''}`}><input type="radio" name="remake-mode" checked={mode === 'render'} onChange={() => setMode('render')} /><span><strong>生成成片</strong><small>使用已配置的 Hypit 服务生成并检查最终视频</small></span></label>
         </div>
       </fieldset>
       {mode === 'render' ? <label>费用授权<input value={budget} onChange={event => setBudget(event.target.value)} placeholder="例如：本批最多 ¥50；或仅使用账户免费额度" /></label> : null}
-      <p className="warning">重新制作会重构脚本、视觉、声音和节奏，不会采用镜像、变速、裁剪等伪原创手段；平台是否认定原创仍由平台规则与实际作品决定。</p>
+      <p className="warning">成片通过重新生成画面与声音实现翻拍，不会裁剪、调色或镜像原片；平台审核结果仍取决于平台规则与实际作品。</p>
       {message ? <p className="error">{message}</p> : null}
-      <div className="modal-foot"><button disabled={busy} onClick={close}>取消</button><button className="primary" disabled={busy} onClick={() => void submit()}>{busy ? '正在创建…' : mode === 'render' ? '开始制作成片' : '创建原创工程'}</button></div>
+      <div className="modal-foot"><button disabled={busy} onClick={close}>取消</button><button className="primary" disabled={busy} onClick={() => void submit()}>{busy ? '正在创建…' : mode === 'render' ? '开始制作成片' : '创建翻拍工程'}</button></div>
     </div>
   </div>
 }
@@ -629,26 +630,30 @@ function RemakeTask({ job, assets, reload }: { job: RemakeJob; assets: MediaAsse
     {job.outputs.length ? <p className="notice">已生成 {job.outputs.length} 个成片，并加入媒体库。</p> : null}
     {job.error ? <p className="error">{job.error}</p> : null}
     <details className="analysis-details" open={active}><summary>制作记录（{job.logs.length} 条）</summary><div className="analysis-log" role="log" aria-live="polite" ref={logRef}>{job.logs.map((entry, index) => <div className={`analysis-log-line ${entry.level}`} key={`${entry.at}-${index}`}><time>{new Date(entry.at).toLocaleTimeString()}</time><span className="analysis-stage">{analysisStageNames[entry.stage]}</span><span>{entry.message}</span></div>)}</div></details>
-    <div className="row end">{originals.length && outputs.length ? <button onClick={() => setComparing(true)}>前后对比与哈希</button> : null}{active ? <button onClick={() => void api.remakes.cancel(job.id).then(reload)}>取消</button> : <button className="danger-text" onClick={() => { if (window.confirm('确认删除该 Hypit 任务记录？项目工程与已生成视频会保留。')) void api.remakes.delete(job.id).then(reload) }}>删除历史</button>}</div>
+    <div className="row end">{originals.length && outputs.length ? <button onClick={() => setComparing(true)}>前后对比与哈希</button> : null}{active ? <button onClick={() => void api.remakes.cancel(job.id).then(reload)}>取消</button> : null}{['failed', 'cancelled'].includes(job.status) ? <button onClick={() => void api.remakes.retry(job.id).then(reload).catch(error => toast(errorText(error), 'bad'))}>重试</button> : null}{!active ? <button className="danger-text" onClick={() => { if (window.confirm('确认删除该 Hypit 任务记录？项目工程与已生成视频会保留。')) void api.remakes.delete(job.id).then(reload) }}>删除历史</button> : null}</div>
     {comparing ? <CompareDialog originals={originals} remade={outputs} close={() => setComparing(false)} /> : null}
   </article>
 }
 
 function TasksPage({ analysis, remakes, batches, assets, reload }: { analysis: AnalysisJob[]; remakes: RemakeJob[]; batches: PublishBatch[]; assets: MediaAsset[]; reload: () => void }) {
   const [taskTab, setTaskTab] = useState<TaskTab>(() => storedChoice(TASK_TAB_STORAGE_KEY, taskTabs, 'analysis'))
-  const historyCount = analysis.filter(job => !['queued', 'preparing', 'analyzing'].includes(job.status)).length
+  const analysisHistoryCount = analysis.filter(job => !['queued', 'preparing', 'analyzing'].includes(job.status)).length
+  const remakeHistoryCount = remakes.filter(job => !['queued', 'preparing', 'directing', 'building'].includes(job.status)).length
   useEffect(() => { try { window.localStorage.setItem(TASK_TAB_STORAGE_KEY, taskTab) } catch { /* storage unavailable */ } }, [taskTab])
   return <section className="panel task-panel">
     <div className="task-tabs" role="tablist" aria-label="任务类型">
       <button role="tab" aria-selected={taskTab === 'analysis'} className={taskTab === 'analysis' ? 'active' : ''} onClick={() => setTaskTab('analysis')}><strong>分析任务</strong><span>Codex 逐个执行</span><em>{analysis.length}</em></button>
-      <button role="tab" aria-selected={taskTab === 'remake'} className={taskTab === 'remake' ? 'active' : ''} onClick={() => setTaskTab('remake')}><strong>Hypit 重新制作</strong><span>原创方案、工程与成片</span><em>{remakes.length}</em></button>
+      <button role="tab" aria-selected={taskTab === 'remake'} className={taskTab === 'remake' ? 'active' : ''} onClick={() => setTaskTab('remake')}><strong>Hypit 重新制作</strong><span>翻拍方案、工程与成片</span><em>{remakes.length}</em></button>
       <button role="tab" aria-selected={taskTab === 'publisher'} className={taskTab === 'publisher' ? 'active' : ''} onClick={() => setTaskTab('publisher')}><strong>抖音发布任务</strong><span>共用一个浏览器串行提交</span><em>{batches.length}</em></button>
       {taskTab === 'publisher' ? <a target="_blank" rel="noreferrer" href="https://creator.douyin.com/creator-micro/content/manage">在抖音查看作品管理 ↗</a> : null}
     </div>
     {taskTab === 'analysis' ? <>
-      <div className="task-history-actions"><span>共 <span className="data">{analysis.length}</span> 条记录，<span className="data">{historyCount}</span> 条已结束</span><button className="danger-text" disabled={!historyCount} onClick={() => { if (window.confirm(`确认清除全部 ${historyCount} 条已结束的分析历史？运行中的任务和媒体库分析结果将保留。`)) void api.analysis.clearHistory().then(reload) }}>清除已结束的历史</button></div>
+      <div className="task-history-actions"><span>共 <span className="data">{analysis.length}</span> 条记录，<span className="data">{analysisHistoryCount}</span> 条已结束</span><button className="danger-text" disabled={!analysisHistoryCount} onClick={() => { if (window.confirm(`确认清除全部 ${analysisHistoryCount} 条已结束的分析历史？运行中的任务和媒体库分析结果将保留。`)) void api.analysis.clearHistory().then(reload) }}>清除已结束的历史</button></div>
       <div className="task-list" role="tabpanel">{analysis.length ? analysis.map(job => <AnalysisTask job={job} reload={reload} key={job.id} />) : <div className="empty"><strong>还没有分析任务</strong>在媒体库勾选视频后点击「分析」</div>}</div>
-    </> : taskTab === 'remake' ? <div className="task-list" role="tabpanel">{remakes.length ? remakes.map(job => <RemakeTask job={job} assets={assets} reload={reload} key={job.id} />) : <div className="empty"><strong>还没有重新制作任务</strong>在媒体库选择视频后点击「重新制作」</div>}</div> : <div className="task-list" role="tabpanel">{batches.length ? batches.map(batch => <PublishBatchCard batch={batch} reload={reload} key={batch.id} />) : <div className="empty"><strong>还没有发布任务</strong>在媒体库选择已分析的视频后点击「发布到抖音」</div>}</div>}
+    </> : taskTab === 'remake' ? <>
+      <div className="task-history-actions"><span>共 <span className="data">{remakes.length}</span> 条记录，<span className="data">{remakeHistoryCount}</span> 条已结束</span><button className="danger-text" disabled={!remakeHistoryCount} onClick={() => { if (window.confirm(`确认清除全部 ${remakeHistoryCount} 条已结束的 Hypit 历史？运行中的任务、项目工程与已生成视频将保留。`)) void api.remakes.clearHistory().then(reload) }}>清除已结束的历史</button></div>
+      <div className="task-list" role="tabpanel">{remakes.length ? remakes.map(job => <RemakeTask job={job} assets={assets} reload={reload} key={job.id} />) : <div className="empty"><strong>还没有重新制作任务</strong>在媒体库选择视频后点击「重新制作」</div>}</div>
+    </> : <div className="task-list" role="tabpanel">{batches.length ? batches.map(batch => <PublishBatchCard batch={batch} reload={reload} key={batch.id} />) : <div className="empty"><strong>还没有发布任务</strong>在媒体库选择已分析的视频后点击「发布到抖音」</div>}</div>}
   </section>
 }
 

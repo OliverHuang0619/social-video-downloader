@@ -106,6 +106,17 @@ describe('工作台持久化与安全边界', () => {
     expect(db.deleteRemake(job.id)).toBe(true)
   })
 
+  it('Hypit 已结束历史可批量清除，运行中记录保留', () => {
+    const now = new Date().toISOString(), asset = db.assets()[0]
+    const active: RemakeJob = { id: 'remake-active', status: 'building', assetIds: [asset.id], mode: 'render', direction: '高度还原翻拍', progress: 60, message: '生成中', projectDir: path.join(config, 'hypit-projects/remake-active'), outputs: [], logs: [], createdAt: now, updatedAt: now }
+    const done: RemakeJob = { id: 'remake-done', status: 'failed', assetIds: [asset.id], mode: 'editable', direction: '高度还原翻拍', progress: 40, message: '失败', projectDir: path.join(config, 'hypit-projects/remake-done'), outputs: [], logs: [], error: '429', createdAt: now, updatedAt: now }
+    db.saveRemake(active)
+    db.saveRemake(done)
+    expect(db.clearRemakeHistory()).toBe(1)
+    expect(db.remake('remake-active')).toBeTruthy()
+    expect(db.remake('remake-done')).toBeUndefined()
+  })
+
   it('抖音发布成功时立即把媒体标记为已处理', async () => {
     const skill = path.join(root, 'publisher-skill'), scripts = path.join(skill, 'scripts')
     mkdirSync(scripts, { recursive: true })

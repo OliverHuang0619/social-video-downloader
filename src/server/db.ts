@@ -131,6 +131,14 @@ export class AppDatabase {
   remake(id: string) { const row = this.sqlite.prepare('SELECT payload FROM remake_jobs WHERE id=?').get(id) as { payload: string } | undefined; return row ? JSON.parse(row.payload) as RemakeJob : undefined }
   remakes() { return (this.sqlite.prepare('SELECT payload FROM remake_jobs ORDER BY updated_at DESC').all() as { payload: string }[]).map(row => JSON.parse(row.payload) as RemakeJob) }
   deleteRemake(id: string) { const job = this.remake(id); if (!job || ['queued', 'preparing', 'directing', 'building'].includes(job.status)) return false; return this.sqlite.prepare('DELETE FROM remake_jobs WHERE id=?').run(id).changes > 0 }
+  clearRemakeHistory() {
+    let count = 0
+    for (const job of this.remakes()) {
+      if (['queued', 'preparing', 'directing', 'building'].includes(job.status)) continue
+      if (this.deleteRemake(job.id)) count += 1
+    }
+    return count
+  }
 
   createAnalysis(job: AnalysisJob, outputDir: string) { this.sqlite.prepare('INSERT INTO analysis_jobs(id,status,asset_ids,progress,message,error,output_dir,created_at,updated_at,detail_json) VALUES(?,?,?,?,?,?,?,?,?,?)').run(job.id, job.status, JSON.stringify(job.assetIds), job.progress, job.message, job.error || null, outputDir, job.createdAt, job.updatedAt, JSON.stringify({ currentItem: job.currentItem, processedItems: job.processedItems, totalItems: job.totalItems, logs: job.logs })) }
   updateAnalysis(id: string, values: Partial<Pick<AnalysisJob, 'status' | 'progress' | 'message' | 'error' | 'currentItem' | 'processedItems' | 'totalItems' | 'logs'>>) {
