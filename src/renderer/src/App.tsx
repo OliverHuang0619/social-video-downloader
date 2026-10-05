@@ -26,6 +26,36 @@ const quickTimeQualities: Array<{ value: QuickTimeQuality; label: string }> = [
 ]
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error)
 const formatDuration = (value?: number) => value ? `${Math.floor(value / 60)}:${String(Math.floor(value % 60)).padStart(2, '0')}` : '—'
+const formatElapsedSeconds = (totalSeconds: number) => {
+  const seconds = Math.max(0, Math.floor(totalSeconds))
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const remainder = seconds % 60
+  if (hours > 0) return `${hours}:${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`
+  return `${minutes}:${String(remainder).padStart(2, '0')}`
+}
+const taskElapsedSeconds = (createdAt: string, updatedAt: string, active: boolean, nowMs: number) => {
+  const start = Date.parse(createdAt)
+  const end = active ? nowMs : Date.parse(updatedAt)
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return 0
+  return Math.max(0, (end - start) / 1000)
+}
+function useTaskElapsed(createdAt: string, updatedAt: string, active: boolean) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!active) return
+    setNow(Date.now())
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [active, createdAt])
+  const seconds = taskElapsedSeconds(createdAt, updatedAt, active, now)
+  return { label: active ? '已运行' : '总耗时', text: formatElapsedSeconds(seconds) }
+}
+function TaskElapsed({ createdAt, updatedAt, active }: { createdAt: string; updatedAt: string; active: boolean }) {
+  const elapsed = useTaskElapsed(createdAt, updatedAt, active)
+  return <span className="task-elapsed" aria-live={active ? 'polite' : 'off'}>{elapsed.label} <strong className="data">{elapsed.text}</strong></span>
+}
+function assetTitle(asset: MediaAsset) { return asset.analysis?.title || asset.filename }
 const formatBytes = (value: number) => value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(2)} GB` : value >= 1024 ** 2 ? `${(value / 1024 ** 2).toFixed(1)} MB` : `${Math.round(value / 1024)} KB`
 const formatGroups: Record<MediaFormatKind, string> = { 'video-audio': '视频与音频', 'video-only': '仅视频', 'audio-only': '仅音频' }
 const formatLabel = (format: MediaFormat) => `${format.height ? `${format.height}p` : format.bitrate ? `${Math.round(format.bitrate)}kbps` : '音频'} · ${format.ext.toUpperCase()}${format.quickTimeCompatible ? ' · QuickTime' : ''}`
@@ -458,7 +488,7 @@ function AnalysisTask({ job, reload }: { job: AnalysisJob; reload: () => void })
   return <article className="task analysis-task">
     <div className="row between"><span className="task-title">{job.assetIds.length} 个视频 <span className="data muted">· {job.id.slice(0, 8)}</span></span><span className={`pill ${job.status}`}>{taskNames[job.status] || job.status}</span></div>
     <div className={`progress ${job.status === 'completed' ? 'done' : job.status === 'failed' ? 'bad' : ''}`}><i style={{ width: `${job.progress}%` }} /></div>
-    <div className="analysis-summary"><span>{Math.round(job.progress)}%</span><span>{job.processedItems || 0}/{totalItems} 个媒体已准备</span><span>更新于 {new Date(job.updatedAt).toLocaleTimeString()}</span></div>
+    <div className="analysis-summary"><span>{Math.round(job.progress)}%</span><span>{job.processedItems || 0}/{totalItems} 个媒体已准备</span><TaskElapsed createdAt={job.createdAt} updatedAt={job.updatedAt} active={active} /><span>更新于 {new Date(job.updatedAt).toLocaleTimeString()}</span></div>
     <p>{job.message}</p>
     {job.currentItem ? <p className="analysis-current" title={job.currentItem}>当前文件：{job.currentItem}</p> : null}
     {job.error ? <p className="error">{job.error}</p> : null}
@@ -474,7 +504,7 @@ function AnalysisTask({ job, reload }: { job: AnalysisJob; reload: () => void })
 
 function PublishBatchCard({ batch, reload }: { batch: PublishBatch; reload: () => void }) {
   return <article className="batch">
-    <div className="row between"><span className="task-title">{batch.dispatchMode === 'local' ? '本地定时' : '抖音平台排期'} <span className="data muted">· {batch.id.slice(0, 8)} · {new Date(batch.createdAt).toLocaleString()}</span></span><span className={`pill ${batch.status}`}>{taskNames[batch.status] || batch.status}</span></div>
+    <div className="row between"><span className="task-title">{batch.dispatchMode === 'local' ? '本地定时' : '抖音平台排期'} <span className="data muted">· {batch.id.slice(0, 8)} · {new Date(batch.createdAt).toLocaleString()}</span></span><span className="row"><TaskElapsed createdAt={batch.createdAt} updatedAt={batch.updatedAt} active={['queued', 'waiting_local', 'running'].includes(batch.status)} /><span className={`pill ${batch.status}`}>{taskNames[batch.status] || batch.status}</span></span></div>
     <div className="publish-job publish-job-head"><span>作品</span><span>状态</span><span>本地提交时间</span><span>抖音发布时间</span><span /></div>
     {batch.jobs.map(job => <div className="publish-job" key={job.id}>
       <span title={job.title}>{job.title}</span>
@@ -587,11 +617,14 @@ function RemakeTask({ job, assets, reload }: { job: RemakeJob; assets: MediaAsse
   const active = ['queued', 'preparing', 'directing', 'building'].includes(job.status)
   const [comparing, setComparing] = useState(false)
   const logRef = useRef<HTMLDivElement>(null)
-  const originals = assets.filter(asset => job.assetIds.includes(asset.id)), outputs = assets.filter(asset => job.outputs.includes(asset.file))
+  const assetById = useMemo(() => new Map(assets.map(asset => [asset.id, asset])), [assets])
+  const originals = useMemo(() => job.assetIds.map(id => assetById.get(id)).filter((asset): asset is MediaAsset => Boolean(asset)), [assetById, job.assetIds])
+  const outputs = assets.filter(asset => job.outputs.includes(asset.file))
   useEffect(() => { if (active && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight }, [active, job.logs.length])
   return <article className="task analysis-task">
-    <div className="row between"><span className="task-title">{job.assetIds.length} 个视频 · {job.mode === 'render' ? '生成成片' : '可编辑工程'} <span className="data muted">· {job.id.slice(0, 8)}</span></span><span className={`pill ${job.status}`}>{taskNames[job.status] || job.status}</span></div>
+    <div className="row between"><span className="task-title">{job.assetIds.length} 个视频 · {job.mode === 'render' ? '生成成片' : '可编辑工程'} <span className="data muted">· {job.id.slice(0, 8)}</span></span><span className="row"><TaskElapsed createdAt={job.createdAt} updatedAt={job.updatedAt} active={active} /><span className={`pill ${job.status}`}>{taskNames[job.status] || job.status}</span></span></div>
     <div className={`progress ${job.status === 'completed' ? 'done' : job.status === 'failed' ? 'bad' : ''}`}><i style={{ width: `${job.progress}%` }} /></div>
+    {originals.length ? <div className="remake-sources"><p className="remake-sources-label">原始视频</p><ul className="remake-source-list">{originals.map(asset => <li className="remake-source-item" key={asset.id}><div className="remake-source-thumb" aria-hidden="true"><FirstFrame asset={asset} /></div><div className="remake-source-meta"><strong title={assetTitle(asset)}>{assetTitle(asset)}</strong><span>{asset.uploader || '未知作者'} · <span className="data">{formatDuration(asset.duration)}</span> · {asset.filename}</span></div></li>)}</ul></div> : null}
     <p>{job.message}</p><p className="muted">{job.direction}</p>
     {job.outputs.length ? <p className="notice">已生成 {job.outputs.length} 个成片，并加入媒体库。</p> : null}
     {job.error ? <p className="error">{job.error}</p> : null}

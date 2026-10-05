@@ -9,6 +9,86 @@
   font-size: 11.5px;
 }
 
+.task-elapsed {
+  color: var(--ink-3);
+  font-family: var(--font-data);
+  font-size: 11.5px;
+}
+
+.task-elapsed strong {
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
+.remake-sources {
+  margin: 10px 0 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.remake-sources-label {
+  margin: 0 0 8px;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.remake-source-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.remake-source-item {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.remake-source-thumb {
+  aspect-ratio: 9 / 16;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: var(--inset);
+}
+
+.remake-source-thumb img,
+.remake-source-thumb .preview-fallback {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.remake-source-meta {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.remake-source-meta strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remake-source-meta span {
+  overflow: hidden;
+  color: var(--ink-3);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .analysis-current {
   overflow: hidden;
   text-overflow: ellipsis;
