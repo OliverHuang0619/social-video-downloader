@@ -1,4 +1,4 @@
-import type { AnalysisJob, AuthStatus, BrowserStatus, CodexConnectionPublic, CodexConnectionTestResult, CodexProviderPublic, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, DownloadJob, HypitStatus, MediaAsset, MediaFileHash, MediaFileMetadata, PublishBatch, RemakeJob, ScanEvent, ToolStatus, ToolUpdateEvent } from '../../shared/types'
+import type { AnalysisJob, AuthStatus, BrowserStatus, CodexConnectionPublic, CodexConnectionTestResult, CodexProviderPublic, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, CreatorSubscription, DownloadJob, HypitStatus, MediaAsset, MediaFileHash, MediaFileMetadata, PublishBatch, RemakeJob, ScanEvent, SubscriptionNotification, SubscriptionSchedule, SubscriptionStatus, ToolStatus, ToolUpdateEvent } from '../../shared/types'
 
 let csrfToken = ''
 let events: EventSource | undefined
@@ -12,6 +12,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return value as T
 }
 const post = <T>(url: string, value: unknown = {}) => request<T>(url, { method: 'POST', body: JSON.stringify(value) })
+const patch = <T>(url: string, value: unknown = {}) => request<T>(url, { method: 'PATCH', body: JSON.stringify(value) })
 
 function connectEvents() {
   events?.close(); events = new EventSource('/api/events')
@@ -61,6 +62,18 @@ export const api = {
     testConnection: (value: { mode?: CodexConnectionPublic['mode']; providerId?: string; ccSwitchBaseUrl?: string; ccSwitchModel?: string; baseUrl?: string; apiKey?: string } = {}) => post<CodexConnectionTestResult>('/api/codex/connection/test', value),
   },
   publisher: { status: () => request<BrowserStatus>('/api/publisher/status'), login: () => post<BrowserStatus>('/api/publisher/login'), jobs: () => request<PublishBatch[]>('/api/publisher/jobs'), publish: (value: unknown) => post<PublishBatch>('/api/publisher/publish', value), retry: (id: string) => post<void>(`/api/publisher/jobs/${id}/retry`), cancelBatch: (id: string) => post<void>(`/api/publisher/batches/${id}/cancel`), deleteBatch: (id: string) => request<void>(`/api/publisher/batches/${id}`, { method: 'DELETE' }), clearHistory: () => request<{ count: number }>('/api/publisher/batches', { method: 'DELETE' }) },
+  subscriptions: {
+    list: () => request<CreatorSubscription[]>('/api/subscriptions'),
+    create: (sourceUrl: string, autoDownload = false) => post<CreatorSubscription>('/api/subscriptions', { sourceUrl, autoDownload }),
+    update: (id: string, value: { autoDownload?: boolean; enabled?: boolean; displayName?: string }) => patch<CreatorSubscription>(`/api/subscriptions/${encodeURIComponent(id)}`, value),
+    remove: (id: string) => request<void>(`/api/subscriptions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    schedule: () => request<SubscriptionSchedule>('/api/subscriptions/schedule'),
+    updateSchedule: (value: { enabled?: boolean; hour?: number; minute?: number }) => patch<SubscriptionSchedule>('/api/subscriptions/schedule', value),
+    poll: () => post<SubscriptionStatus>('/api/subscriptions/poll'),
+    notifications: () => request<{ notifications: SubscriptionNotification[]; unreadCount: number; schedule: SubscriptionSchedule }>('/api/subscriptions/notifications'),
+    markRead: (value: { ids?: string[]; all?: boolean } = {}) => post<{ unreadCount: number }>('/api/subscriptions/notifications/read', value),
+    status: () => request<SubscriptionStatus>('/api/subscriptions/status'),
+  },
 }
 
-export type WorkbenchEvent = { type: 'downloads'; jobs: DownloadJob[] } | { type: 'creator'; event: ScanEvent } | { type: 'tools'; event: ToolUpdateEvent } | { type: 'library' | 'analysis' | 'remake' | 'publisher' | 'codex'; at: string }
+export type WorkbenchEvent = { type: 'downloads'; jobs: DownloadJob[] } | { type: 'creator'; event: ScanEvent } | { type: 'tools'; event: ToolUpdateEvent } | { type: 'library' | 'analysis' | 'remake' | 'publisher' | 'codex' | 'subscriptions'; at: string }

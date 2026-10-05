@@ -294,4 +294,26 @@ describe('工作台持久化与安全边界', () => {
     expect(db.analysis('analysis-keep-active')).toBeTruthy()
     expect(db.analyses().every(job => ['queued', 'preparing', 'analyzing'].includes(job.status))).toBe(true)
   })
+
+  it('订阅基线 seen、新视频通知与已读状态可持久化', () => {
+    const sub = db.createSubscription({
+      id: 'sub-1', platform: 'youtube', sourceUrl: 'https://www.youtube.com/@example', displayName: 'Example',
+      autoDownload: false, enabled: true,
+    })
+    db.markSeen(sub.id, ['youtube:old1', 'youtube:old2'])
+    expect(db.seenKeys(sub.id).has('youtube:old1')).toBe(true)
+    const note = db.createNotification({
+      id: 'note-1', subscriptionId: sub.id, mediaKey: 'youtube:new1', title: '新视频', sourceUrl: 'https://youtu.be/new1',
+    })
+    expect(db.unreadNotificationCount()).toBe(1)
+    expect(db.notifications()[0]).toMatchObject({ id: note.id, displayName: 'Example', platform: 'youtube' })
+    expect(db.markNotificationsRead(['note-1'])).toBe(1)
+    expect(db.unreadNotificationCount()).toBe(0)
+    db.updateSubscription(sub.id, { autoDownload: true, lastError: '临时失败' })
+    expect(db.subscription(sub.id)).toMatchObject({ autoDownload: true, lastError: '临时失败' })
+    db.updateSubscription(sub.id, { lastError: undefined })
+    expect(db.subscription(sub.id)?.lastError).toBeUndefined()
+    expect(db.deleteSubscription(sub.id)).toBe(true)
+    expect(db.notifications()).toHaveLength(0)
+  })
 })

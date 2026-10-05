@@ -1,6 +1,6 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type SyntheticEvent } from 'react'
 import { createPortal } from 'react-dom'
-import type { AnalysisJob, BrowserStatus, CodexConnectionPublic, CodexProviderPublic, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, DownloadJob, DownloadOptions, HypitStatus, MediaAsset, MediaFileHash, MediaFileMetadata, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, QuickTimeQuality, RemakeJob, ToolStatus } from '../../shared/types'
+import type { AnalysisJob, BrowserStatus, CodexConnectionPublic, CodexProviderPublic, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, CreatorSubscription, DownloadJob, DownloadOptions, HypitStatus, MediaAsset, MediaFileHash, MediaFileMetadata, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, QuickTimeQuality, RemakeJob, SubscriptionNotification, SubscriptionSchedule, ToolStatus } from '../../shared/types'
 import { automaticPlatformPublishTimes, filterMediaAssets, mediaAssetDirectory, normalizePublishTopics, type LibraryStateFilter } from '../../shared/core'
 import { isCodexProviderModeSelectable, shouldShowCodexProvidersManager } from '../../shared/codex-connection-ui'
 import { DEFAULT_HYPIT_REMAKE_DIRECTION } from '../../shared/remake-direction'
@@ -11,14 +11,14 @@ import './compact-library.css'
 
 type Tab = 'download' | 'library' | 'tasks' | 'settings'
 type TaskTab = 'analysis' | 'remake' | 'publisher'
-type SettingsTab = 'tools' | 'codex' | 'hypit' | 'browser' | 'security'
+type SettingsTab = 'tools' | 'codex' | 'hypit' | 'subscriptions' | 'browser' | 'security'
 const NAVIGATION_STORAGE_KEY = 'social-video-workbench:navigation:v1'
 const TASK_TAB_STORAGE_KEY = 'social-video-workbench:task-tab:v1'
 const SETTINGS_TAB_STORAGE_KEY = 'social-video-workbench:settings-tab:v1'
 const LIBRARY_DIRECTORY_STORAGE_KEY = 'social-video-workbench:library-directory:v1'
 const tabs = new Set<Tab>(['download', 'library', 'tasks', 'settings'])
 const taskTabs = new Set<TaskTab>(['analysis', 'remake', 'publisher'])
-const settingsTabs = new Set<SettingsTab>(['tools', 'codex', 'hypit', 'browser', 'security'])
+const settingsTabs = new Set<SettingsTab>(['tools', 'codex', 'hypit', 'subscriptions', 'browser', 'security'])
 function storedChoice<T extends string>(key: string, allowed: Set<T>, fallback: T) {
   try { const value = window.localStorage.getItem(key) as T | null; return value && allowed.has(value) ? value : fallback } catch { return fallback }
 }
@@ -203,12 +203,37 @@ function CookieManager({ cookieSource, setCookieSource }: { cookieSource: 'none'
 }
 
 function DownloadPage({ jobs, setJobs }: { jobs: DownloadJob[]; setJobs: (jobs: DownloadJob[]) => void }) {
-  const [mode, setMode] = useState<'links' | 'creator'>('links'), [input, setInput] = useState(''), [items, setItems] = useState<MediaItem[]>([]), [options, setOptions] = useState(initialOptions), [message, setMessage] = useState(''), [busy, setBusy] = useState(false), [queueView, setQueueView] = useState<'active' | 'failed' | 'all'>('active')
+  const [mode, setMode] = useState<'links' | 'creator' | 'subscriptions'>('links'), [input, setInput] = useState(''), [items, setItems] = useState<MediaItem[]>([]), [options, setOptions] = useState(initialOptions), [message, setMessage] = useState(''), [busy, setBusy] = useState(false), [queueView, setQueueView] = useState<'active' | 'failed' | 'all'>('active')
+  const [subscriptions, setSubscriptions] = useState<CreatorSubscription[]>([]), [autoDownloadOnAdd, setAutoDownloadOnAdd] = useState(false)
   const deferred = useDeferredValue(items), selected = useMemo(() => items.filter(item => item.selected), [items])
+  const loadSubscriptions = useCallback(() => { void api.subscriptions.list().then(setSubscriptions).catch(error => setMessage(errorText(error))) }, [])
   useEffect(() => { void Promise.all([api.destination.current(), api.downloads.list()]).then(([outputRoot, history]) => { setOptions(value => ({ ...value, outputRoot })); if (history.length) setJobs(history) }) }, [setJobs])
-  useEffect(() => onEvent(raw => { const event = raw as WorkbenchEvent; if (event.type === 'downloads') setJobs(event.jobs); if (event.type === 'creator') { const update = event.event; if (update.type === 'item') setItems(current => current.some(item => item.id === update.item.id) ? current : [...current, update.item]); if (update.type === 'status') setMessage(update.message); if (update.type === 'done') { setBusy(false); setMessage(`扫描完成，共 ${update.count} 个视频`) } if (update.type === 'error') { setBusy(false); setMessage(update.message) } } }), [setJobs])
+  useEffect(() => { if (mode === 'subscriptions') loadSubscriptions() }, [mode, loadSubscriptions])
+  useEffect(() => onEvent(raw => {
+    const event = raw as WorkbenchEvent
+    if (event.type === 'downloads') setJobs(event.jobs)
+    if (event.type === 'creator') {
+      const update = event.event
+      if (update.type === 'item') setItems(current => current.some(item => item.id === update.item.id) ? current : [...current, update.item])
+      if (update.type === 'status') setMessage(update.message)
+      if (update.type === 'done') { setBusy(false); setMessage(`扫描完成，共 ${update.count} 个视频`) }
+      if (update.type === 'error') { setBusy(false); setMessage(update.message) }
+    }
+    if (event.type === 'subscriptions' && mode === 'subscriptions') loadSubscriptions()
+  }), [setJobs, mode, loadSubscriptions])
   const analyze = async () => { if (!input.trim()) return; setBusy(true); setMessage(''); try { const urls = input.split(/\r?\n/).map(value => value.trim()).filter(Boolean); setItems(await api.source.analyze(urls, options.cookieSource)); setMessage(`已解析 ${urls.length} 个链接`) } catch (error) { setMessage(errorText(error)) } finally { setBusy(false) } }
   const scan = async () => { setItems([]); setBusy(true); setMessage('正在扫描主页…'); try { await api.creator.scan(input, options.cookieSource) } catch (error) { setBusy(false); setMessage(errorText(error)) } }
+  const addSubscription = async () => {
+    if (!input.trim()) return
+    setBusy(true); setMessage('正在建立订阅基线…')
+    try {
+      const created = await api.subscriptions.create(input.trim(), autoDownloadOnAdd)
+      setInput(''); setMessage(`已订阅 ${created.displayName}（仅追踪之后新发内容）`)
+      toast(`已订阅 ${created.displayName}`)
+      loadSubscriptions()
+    } catch (error) { setMessage(errorText(error)) }
+    finally { setBusy(false) }
+  }
   const toggle = useCallback((id: string) => setItems(current => current.map(item => item.id === id ? { ...item, selected: !item.selected } : item)), [])
   const format = useCallback((id: string, value: string) => setItems(current => current.map(item => item.id === id ? { ...item, selectedFormatId: value } : item)), [])
   const setCookieSource = useCallback((cookieSource: 'none' | 'file') => setOptions(value => ({ ...value, cookieSource })), [])
@@ -222,16 +247,43 @@ function DownloadPage({ jobs, setJobs }: { jobs: DownloadJob[]; setJobs: (jobs: 
   return <div className="page-stack">
     <section className="panel source">
       <div className="source-head">
-        <div className="segmented" role="tablist" aria-label="来源类型"><button role="tab" aria-selected={mode === 'links'} className={mode === 'links' ? 'active' : ''} onClick={() => setMode('links')}>视频链接</button><button role="tab" aria-selected={mode === 'creator'} className={mode === 'creator' ? 'active' : ''} onClick={() => setMode('creator')}>博主主页</button></div>
+        <div className="segmented" role="tablist" aria-label="来源类型">
+          <button role="tab" aria-selected={mode === 'links'} className={mode === 'links' ? 'active' : ''} onClick={() => setMode('links')}>视频链接</button>
+          <button role="tab" aria-selected={mode === 'creator'} className={mode === 'creator' ? 'active' : ''} onClick={() => setMode('creator')}>博主主页</button>
+          <button role="tab" aria-selected={mode === 'subscriptions'} className={mode === 'subscriptions' ? 'active' : ''} onClick={() => setMode('subscriptions')}>订阅</button>
+        </div>
         <CookieManager cookieSource={options.cookieSource} setCookieSource={setCookieSource} />
       </div>
-      <textarea rows={4} value={input} onChange={event => setInput(event.target.value)} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && input.trim() && !busy) void (mode === 'links' ? analyze() : scan()) }} placeholder={mode === 'links' ? '粘贴 YouTube 或 Instagram 视频链接，每行一个' : '粘贴 YouTube 频道或 Instagram 主页地址'} aria-label={mode === 'links' ? '视频链接' : '博主主页地址'} />
-      <div className="source-foot">
-        <p className="hint">{mode === 'links' ? '解析后可逐个选择画质与格式；⌘/Ctrl + Enter 快速解析' : '扫描会列出该主页的全部视频，结果逐条出现'}</p>
-        <button className="primary" disabled={busy || !input.trim()} onClick={() => void (mode === 'links' ? analyze() : scan())}>{busy ? '处理中…' : mode === 'links' ? '解析链接' : '扫描主页'}</button>
-      </div>
+      {mode === 'subscriptions' ? <>
+        <textarea rows={3} value={input} onChange={event => setInput(event.target.value)} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && input.trim() && !busy) void addSubscription() }} placeholder="粘贴 YouTube 频道或 Instagram 主页地址以订阅" aria-label="订阅博主地址" />
+        <div className="source-foot">
+          <label className="check"><input type="checkbox" checked={autoDownloadOnAdd} onChange={event => setAutoDownloadOnAdd(event.target.checked)} />订阅后自动下载新视频</label>
+          <button className="primary" disabled={busy || !input.trim()} onClick={() => void addSubscription()}>{busy ? '处理中…' : '添加订阅'}</button>
+        </div>
+      </> : <>
+        <textarea rows={4} value={input} onChange={event => setInput(event.target.value)} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && input.trim() && !busy) void (mode === 'links' ? analyze() : scan()) }} placeholder={mode === 'links' ? '粘贴 YouTube 或 Instagram 视频链接，每行一个' : '粘贴 YouTube 频道或 Instagram 主页地址'} aria-label={mode === 'links' ? '视频链接' : '博主主页地址'} />
+        <div className="source-foot">
+          <p className="hint">{mode === 'links' ? '解析后可逐个选择画质与格式；⌘/Ctrl + Enter 快速解析' : '扫描会列出该主页的全部视频，结果逐条出现'}</p>
+          <button className="primary" disabled={busy || !input.trim()} onClick={() => void (mode === 'links' ? analyze() : scan())}>{busy ? '处理中…' : mode === 'links' ? '解析链接' : '扫描主页'}</button>
+        </div>
+      </>}
       {message ? <p className="notice">{message}</p> : null}
     </section>
+    {mode === 'subscriptions' ? <section className="panel">
+      <div className="panel-head"><div><h2>已订阅博主</h2><p>{subscriptions.length} 个 · 发现新视频会写入通知；勾选自动下载后额外入队</p></div></div>
+      <div className="subscription-list">{subscriptions.length ? subscriptions.map(item => <article className={`subscription-item ${item.enabled ? '' : 'paused'}`} key={item.id}>
+        <div>
+          <strong>{item.displayName}</strong>
+          <small>{item.platform} · <a href={item.sourceUrl} target="_blank" rel="noreferrer">{item.sourceUrl}</a></small>
+          <small>{item.lastPolledAt ? `上次巡检 ${new Date(item.lastPolledAt).toLocaleString()}` : '尚未巡检'}{item.lastError ? ` · ${item.lastError}` : ''}</small>
+        </div>
+        <div className="subscription-actions">
+          <label className="check"><input type="checkbox" checked={item.autoDownload} onChange={event => void api.subscriptions.update(item.id, { autoDownload: event.target.checked }).then(loadSubscriptions).catch(error => toast(errorText(error), 'bad'))} />自动下载</label>
+          <label className="check"><input type="checkbox" checked={item.enabled} onChange={event => void api.subscriptions.update(item.id, { enabled: event.target.checked }).then(loadSubscriptions).catch(error => toast(errorText(error), 'bad'))} />启用</label>
+          <button className="ghost small" onClick={() => { if (window.confirm(`取消订阅 ${item.displayName}？`)) void api.subscriptions.remove(item.id).then(() => { toast('已取消订阅'); loadSubscriptions() }).catch(error => toast(errorText(error), 'bad')) }}>删除</button>
+        </div>
+      </article>) : <div className="empty"><strong>还没有订阅</strong>粘贴频道或主页地址，建立基线后只追踪之后新发的内容</div>}</div>
+    </section> : <>
     <section className="split">
       <div className="panel">
         <div className="panel-head">
@@ -269,6 +321,7 @@ function DownloadPage({ jobs, setJobs }: { jobs: DownloadJob[]; setJobs: (jobs: 
         {job.status === 'failed' ? <p className="error task-error">{job.error || '下载失败'}</p> : <div className="task-meta"><span className="data">{job.progress.toFixed(1)}%</span><span>·</span><span>{job.detail || '等待中'}</span>{job.speed ? <span className="data">· {job.speed}</span> : null}{job.eta ? <span className="data">· 剩余 {job.eta}</span> : null}</div>}
       </div>) : <div className="empty small">{queueView === 'failed' ? '没有失败的下载' : queueView === 'active' ? '没有进行中的下载' : '队列为空'}</div>}</div>
     </section> : null}
+    </>}
   </div>
 }
 
@@ -862,6 +915,111 @@ function HypitSettingsPanel({ config, refresh }: { config: HypitStatus | null; r
   </div>
 }
 
+function NotificationBell() {
+  const [open, setOpen] = useState(false)
+  const [notifications, setNotifications] = useState<SubscriptionNotification[]>([])
+  const [unreadCount, setUnreadCount] = useState(0)
+  const knownIds = useRef(new Set<string>())
+  const load = useCallback(async (announce = false) => {
+    try {
+      const value = await api.subscriptions.notifications()
+      if (announce && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        for (const item of value.notifications) {
+          if (item.readAt || knownIds.current.has(item.id)) continue
+          try {
+            const note = new Notification(item.displayName || '订阅更新', { body: item.title, tag: item.id })
+            note.onclick = () => { window.focus(); setOpen(true); void api.subscriptions.markRead({ ids: [item.id] }).then(() => load(false)) }
+          } catch { /* browser may block */ }
+        }
+      }
+      knownIds.current = new Set(value.notifications.map(item => item.id))
+      setNotifications(value.notifications)
+      setUnreadCount(value.unreadCount)
+    } catch { /* ignore until authenticated */ }
+  }, [])
+  useEffect(() => { void load(false) }, [load])
+  useEffect(() => onEvent(raw => { const event = raw as WorkbenchEvent; if (event.type === 'subscriptions') void load(true) }), [load])
+  const ensurePermission = async () => {
+    if (typeof Notification === 'undefined') return
+    if (Notification.permission === 'default') await Notification.requestPermission()
+  }
+  const markAll = async () => {
+    try { await api.subscriptions.markRead({ all: true }); await load(false) } catch (error) { toast(errorText(error), 'bad') }
+  }
+  return <div className="notify-bell">
+    <button type="button" className="utility notify-trigger" aria-label={`通知${unreadCount ? `，${unreadCount} 条未读` : ''}`} onClick={() => { setOpen(value => !value); void ensurePermission() }}>
+      通知
+      {unreadCount ? <em className="notify-badge">{unreadCount > 99 ? '99+' : unreadCount}</em> : null}
+    </button>
+    {open ? <div className="notify-panel" role="dialog" aria-label="订阅通知">
+      <div className="notify-head">
+        <strong>订阅通知</strong>
+        <div className="row">
+          {unreadCount ? <button type="button" className="ghost small" onClick={() => void markAll()}>全部已读</button> : null}
+          <button type="button" className="ghost small" onClick={() => setOpen(false)}>关闭</button>
+        </div>
+      </div>
+      <div className="notify-list">{notifications.length ? notifications.map(item => <button type="button" className={`notify-item ${item.readAt ? '' : 'unread'}`} key={item.id} onClick={() => {
+        void api.subscriptions.markRead({ ids: [item.id] }).then(() => load(false))
+        window.open(item.sourceUrl, '_blank', 'noopener,noreferrer')
+      }}>
+        <strong>{item.title}</strong>
+        <small>{item.displayName || '订阅'} · {new Date(item.createdAt).toLocaleString()}{item.downloadJobId ? ' · 已入队下载' : ''}</small>
+      </button>) : <p className="muted">暂无新视频通知</p>}</div>
+    </div> : null}
+  </div>
+}
+
+function SubscriptionSettingsPanel() {
+  const [schedule, setSchedule] = useState<SubscriptionSchedule | null>(null)
+  const [hour, setHour] = useState(0)
+  const [minute, setMinute] = useState(0)
+  const [message, setMessage] = useState('')
+  const [busy, setBusy] = useState(false)
+  const load = useCallback(() => {
+    void api.subscriptions.schedule().then(value => {
+      setSchedule(value); setHour(value.hour); setMinute(value.minute)
+    }).catch(error => setMessage(errorText(error)))
+  }, [])
+  useEffect(load, [load])
+  useEffect(() => onEvent(raw => { const event = raw as WorkbenchEvent; if (event.type === 'subscriptions') load() }), [load])
+  const save = async () => {
+    setBusy(true); setMessage('')
+    try {
+      const value = await api.subscriptions.updateSchedule({ enabled: schedule?.enabled ?? true, hour, minute })
+      setSchedule(value); toast('巡检时间已保存')
+    } catch (error) { setMessage(errorText(error)) }
+    finally { setBusy(false) }
+  }
+  const poll = async () => {
+    setBusy(true); setMessage('')
+    try {
+      const value = await api.subscriptions.poll()
+      setSchedule(value.schedule); toast(value.schedule.polling ? '巡检进行中…' : '已触发巡检')
+    } catch (error) { setMessage(errorText(error)) }
+    finally { setBusy(false) }
+  }
+  return <div className="settings-section" role="tabpanel">
+    <h2>博主订阅巡检</h2>
+    <p>每天在设定时刻浅扫已启用订阅；发现新视频写入通知，可选自动下载。</p>
+    <label className="check"><input type="checkbox" checked={schedule?.enabled ?? true} onChange={event => {
+      const enabled = event.target.checked
+      setSchedule(current => current ? { ...current, enabled } : current)
+      void api.subscriptions.updateSchedule({ enabled }).then(setSchedule).catch(error => setMessage(errorText(error)))
+    }} />启用每日巡检</label>
+    <div className="row">
+      <label>时<select value={hour} onChange={event => setHour(Number(event.target.value))}>{Array.from({ length: 24 }, (_, index) => <option key={index} value={index}>{String(index).padStart(2, '0')}</option>)}</select></label>
+      <label>分<select value={minute} onChange={event => setMinute(Number(event.target.value))}>{Array.from({ length: 60 }, (_, index) => <option key={index} value={index}>{String(index).padStart(2, '0')}</option>)}</select></label>
+    </div>
+    <p className="muted">时区跟随服务器 TZ（默认 Asia/Shanghai）。下次巡检：{schedule?.nextPollAt ? new Date(schedule.nextPollAt).toLocaleString() : '—'}{schedule?.lastPollAt ? ` · 上次 ${new Date(schedule.lastPollAt).toLocaleString()}` : ''}</p>
+    <div className="row">
+      <button className="primary" disabled={busy} onClick={() => void save()}>保存时间</button>
+      <button disabled={busy || schedule?.polling} onClick={() => void poll()}>{schedule?.polling ? '巡检中…' : '立即巡检'}</button>
+    </div>
+    {message ? <p className="error">{message}</p> : null}
+  </div>
+}
+
 function SettingsPage({ tools, codex, hypit, browser, refresh, logout }: { tools: ToolStatus | null; codex: CodexStatus | null; hypit: HypitStatus | null; browser: BrowserStatus | null; refresh: () => void; logout: () => void }) {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(() => storedChoice(SETTINGS_TAB_STORAGE_KEY, settingsTabs, 'codex'))
   const official = !codex || codex.mode === 'official'
@@ -872,6 +1030,7 @@ function SettingsPage({ tools, codex, hypit, browser, refresh, logout }: { tools
         ['tools', '运行工具', '下载与转码 CLI'],
         ['codex', 'Codex', '视频分析连接'],
         ['hypit', 'Hypit', '生成服务配置'],
+        ['subscriptions', '订阅巡检', '每日扫描时刻'],
         ['browser', '抖音浏览器', '登录与远程桌面'],
         ['security', '安全', '会话与退出'],
       ] as const).map(([id, label, hint]) => (
@@ -904,6 +1063,7 @@ function SettingsPage({ tools, codex, hypit, browser, refresh, logout }: { tools
       <p>检查 Hypit CLI，并配置 HypiHub / Hypit 的 Base URL 与 API Key，供重新制作「生成成片」使用。</p>
       <HypitSettingsPanel config={hypit} refresh={refresh} />
     </div> : null}
+    {settingsTab === 'subscriptions' ? <SubscriptionSettingsPanel /> : null}
     {settingsTab === 'browser' ? <div className="settings-section" role="tabpanel">
       <h2>抖音浏览器</h2>
       <p>{browser?.message || '正在检查…'}</p>
@@ -946,7 +1106,10 @@ function App() {
     <header className="rail">
       <div className="brand"><div className="brand-mark">▶</div><div><h1>Social Video 工作台</h1><p>下载 → 分析 → 审核 → 发布</p></div></div>
       <nav className="stages" aria-label="工作流阶段">{stages.map(stage => <button className={`stage ${tab === stage.id ? 'active' : ''}`} key={stage.id} aria-current={tab === stage.id ? 'page' : undefined} onClick={() => setTab(stage.id)}><strong>{stage.label}</strong><span className={`stage-status ${stage.tone || ''}`}>{stage.status}</span></button>)}</nav>
-      <button className={`utility ${tab === 'settings' ? 'active' : ''}`} aria-current={tab === 'settings' ? 'page' : undefined} onClick={() => setTab('settings')}>设置</button>
+      <div className="rail-actions">
+        <NotificationBell />
+        <button className={`utility ${tab === 'settings' ? 'active' : ''}`} aria-current={tab === 'settings' ? 'page' : undefined} onClick={() => setTab('settings')}>设置</button>
+      </div>
     </header>
     <div className={tab === 'library' ? 'content library-content' : 'content'}>
       {tab === 'download' ? <DownloadPage jobs={downloads} setJobs={setDownloads} />

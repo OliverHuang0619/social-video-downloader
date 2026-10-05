@@ -256,8 +256,50 @@ export interface ToolUpdateEvent {
   etaSeconds?: number
 }
 export interface AnalyzeRequest { urls: string[]; cookieSource: CookieSource }
-export interface ScanRequest { url: string; cookieSource: CookieSource }
+export interface ScanRequest { url: string; cookieSource: CookieSource; limit?: number }
 export interface StartRequest { items: MediaItem[]; options: DownloadOptions }
+
+export interface CreatorSubscription {
+  id: string
+  platform: Platform
+  sourceUrl: string
+  displayName: string
+  autoDownload: boolean
+  enabled: boolean
+  lastPolledAt?: string
+  lastError?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface SubscriptionNotification {
+  id: string
+  subscriptionId: string
+  mediaKey: string
+  title: string
+  sourceUrl: string
+  thumbnail?: string
+  downloadJobId?: string
+  readAt?: string
+  createdAt: string
+  /** Joined for UI convenience */
+  displayName?: string
+  platform?: Platform
+}
+
+export interface SubscriptionSchedule {
+  enabled: boolean
+  hour: number
+  minute: number
+  lastPollAt?: string
+  nextPollAt?: string
+  polling: boolean
+}
+
+export interface SubscriptionStatus {
+  schedule: SubscriptionSchedule
+  unreadCount: number
+}
 
 export interface DownloaderApi {
   tools: { status(): Promise<ToolStatus>; update(): Promise<ToolStatus>; onProgress(cb: (event: ToolUpdateEvent) => void): () => void }

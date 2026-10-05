@@ -75,6 +75,10 @@ export function mediaFromGalleryDlLine(line: string, username: string): MediaIte
   return { id: shortcode, sourceUrl: directUrl, platform: 'instagram', title: String(data.description || `Instagram 视频 ${shortcode}`).slice(0, 160), uploader: String(data.username || username), duration: Number(data.duration || 0), thumbnail: String(data.display_url || data.thumbnail_url || ''), publishedAt: String(data.date || data.post_date || ''), selected: true, kind: 'video', collection: username, formats: [{ id: 'best', selector: 'best', kind: 'video-audio', ext: 'mp4', quickTimeCompatible: false }], selectedFormatId: 'best' }
 }
 
+class LimitReachedError extends Error {
+  constructor() { super('limit') }
+}
+
 export class MediaService {
   private scanProcess?: ChildProcessWithoutNullStreams
   constructor(private tools: ToolManager) {}
@@ -97,26 +101,59 @@ export class MediaService {
   async scan(request: ScanRequest, report: (event: ScanEvent) => void) {
     const [url] = normalizeUrls(request.url); const scanId = randomUUID(); const seen = new Set<string>(); let count = 0
     const emit = report
-    const onItem = (item: MediaItem) => { const key = `${item.platform}:${item.id}`; if (seen.has(key)) return; seen.add(key); count++; emit({ type: 'item', scanId, item }) }
+    const onItem = (item: MediaItem) => {
+      const key = `${item.platform}:${item.id}`
+      if (seen.has(key)) return
+      seen.add(key)
+      count++
+      emit({ type: 'item', scanId, item })
+      if (request.limit && count >= request.limit) throw new LimitReachedError()
+    }
     void (async () => {
       try {
-        if (detectPlatform(url) === 'instagram') await this.scanInstagram(url, request.cookieSource, scanId, emit, onItem)
-        else await this.scanYtDlp(url, request.cookieSource, scanId, emit, onItem)
+        if (detectPlatform(url) === 'instagram') await this.scanInstagram(url, request.cookieSource, scanId, emit, onItem, true)
+        else await this.scanYtDlp(url, request.cookieSource, scanId, emit, onItem, request.limit, true)
         emit({ type: 'done', scanId, count })
-      } catch (error) { emit({ type: 'error', scanId, message: error instanceof Error ? error.message : String(error) }) }
+      } catch (error) {
+        if (error instanceof LimitReachedError) emit({ type: 'done', scanId, count })
+        else emit({ type: 'error', scanId, message: error instanceof Error ? error.message : String(error) })
+      }
       finally { this.scanProcess = undefined }
     })()
     return { scanId }
   }
+  /** Blocking shallow/full scan for subscription baseline and polls (does not steal the UI scanProcess). */
+  async collectScan(request: ScanRequest): Promise<MediaItem[]> {
+    const [url] = normalizeUrls(request.url)
+    const items: MediaItem[] = []
+    const seen = new Set<string>()
+    const onItem = (item: MediaItem) => {
+      const key = `${item.platform}:${item.id}`
+      if (seen.has(key)) return
+      seen.add(key)
+      items.push(item)
+      if (request.limit && items.length >= request.limit) throw new LimitReachedError()
+    }
+    try {
+      if (detectPlatform(url) === 'instagram') await this.scanInstagram(url, request.cookieSource, 'collect', () => undefined, onItem, false)
+      else await this.scanYtDlp(url, request.cookieSource, 'collect', () => undefined, onItem, request.limit, false)
+    } catch (error) {
+      if (!(error instanceof LimitReachedError)) throw error
+    }
+    return items
+  }
   stop() { this.scanProcess?.kill('SIGTERM'); this.scanProcess = undefined }
-  private async scanYtDlp(url: string, source: CookieSource, scanId: string, emit: (e: ScanEvent) => void, onItem: (i: MediaItem) => void) {
+  private async scanYtDlp(url: string, source: CookieSource, scanId: string, emit: (e: ScanEvent) => void, onItem: (i: MediaItem) => void, limit?: number, track = true) {
     const tool = await this.tools.resolve('yt-dlp'); if (!tool) throw new Error('未找到 yt-dlp，请先安装运行工具。')
     emit({ type: 'status', scanId, message: '正在读取频道或播放列表…' })
-    await this.stream(tool, ['--flat-playlist', '--dump-json', '--yes-playlist', '--no-warnings', ...youtubeCookieArgs(source), url], line => {
+    const args = ['--flat-playlist', '--dump-json', '--yes-playlist', '--no-warnings', ...youtubeCookieArgs(source)]
+    if (limit && limit > 0) args.push('--playlist-end', String(limit))
+    args.push(url)
+    await this.stream(tool, args, line => {
       const raw = JSON.parse(line); onItem(mediaFromYtDlp(raw, raw.url || url, String(raw.playlist_title || raw.channel || '合集')))
-    })
+    }, track)
   }
-  private async scanInstagram(url: string, source: CookieSource, scanId: string, emit: (e: ScanEvent) => void, onItem: (i: MediaItem) => void) {
+  private async scanInstagram(url: string, source: CookieSource, scanId: string, emit: (e: ScanEvent) => void, onItem: (i: MediaItem) => void, track = true) {
     const tool = await this.tools.resolve('gallery-dl'); if (!tool) throw new Error('Instagram 主页扫描需要 gallery-dl，请先点击“安装/更新工具”。')
     const base = url.replace(/\/$/, ''); const username = new URL(base).pathname.split('/').filter(Boolean)[0] || 'Instagram'
     // Instagram's posts feed already contains regular video posts and Reels.
@@ -126,18 +163,27 @@ export class MediaService {
     await this.stream(tool, args, line => {
       const item = mediaFromGalleryDlLine(line, username)
       if (item) onItem(item)
-    })
+    }, track)
   }
-  private stream(command: string, args: string[], onLine: (line: string) => void) {
+  private stream(command: string, args: string[], onLine: (line: string) => void, track = true) {
     return new Promise<void>((resolve, reject) => {
-      const child = spawn(command, args, { windowsHide: true }); this.scanProcess = child; let buffer = '', error = '', callbackError: Error | undefined
+      const child = spawn(command, args, { windowsHide: true }); if (track) this.scanProcess = child; let buffer = '', error = '', callbackError: Error | undefined
       const processLine = (line: string) => {
         if (!line.trim() || callbackError) return
-        try { onLine(line) } catch (value) { callbackError = value instanceof Error ? value : new Error(String(value)); child.kill('SIGTERM') }
+        try { onLine(line) } catch (value) {
+          callbackError = value instanceof Error ? value : new Error(String(value))
+          child.kill('SIGTERM')
+        }
       }
       child.stdout.on('data', chunk => { buffer += chunk.toString(); const lines = buffer.split(/\r?\n/); buffer = lines.pop() || ''; for (const line of lines) processLine(line) })
       child.stderr.on('data', d => error += d)
-      child.on('close', code => { if (buffer.trim()) processLine(buffer); callbackError ? reject(callbackError) : code === 0 || code === null ? resolve() : reject(new Error(classifyError(error))) })
+      child.on('close', code => {
+        if (buffer.trim()) processLine(buffer)
+        if (callbackError instanceof LimitReachedError) resolve()
+        else if (callbackError) reject(callbackError)
+        else if (code === 0 || code === null) resolve()
+        else reject(new Error(classifyError(error)))
+      })
       child.on('error', reject)
     })
   }

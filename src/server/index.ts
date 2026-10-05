@@ -20,16 +20,17 @@ import { migrateLegacy } from './migration'
 import { RemakeService } from './remake'
 import { HypitConfigStore } from './hypit-config'
 import { HypitCliService } from './hypit-cli'
+import { SubscriptionService } from './subscriptions'
 
 type ServerEvent =
   | { type: 'tools'; event: ToolUpdateEvent }
   | { type: 'creator'; event: ScanEvent }
   | { type: 'downloads'; jobs: ReturnType<DownloadQueue['snapshot']> }
-  | { type: 'library' | 'analysis' | 'remake' | 'publisher' | 'codex'; at: string }
+  | { type: 'library' | 'analysis' | 'remake' | 'publisher' | 'codex' | 'subscriptions'; at: string }
 
 const clients = new Set<ServerResponse>()
 const publish = (event: ServerEvent) => { const data = `data: ${JSON.stringify(event)}\n\n`; for (const client of clients) client.write(data) }
-const changed = (type: 'library' | 'analysis' | 'remake' | 'publisher' | 'codex') => publish({ type, at: new Date().toISOString() })
+const changed = (type: 'library' | 'analysis' | 'remake' | 'publisher' | 'codex' | 'subscriptions') => publish({ type, at: new Date().toISOString() })
 const config = new ConfigStore(), tools = new ToolManager(), media = new MediaService(tools), queue = new DownloadQueue(tools)
 const db = new AppDatabase(), auth = new AuthService(db), library = new LibraryService(db), codex = new CodexService(() => changed('codex'))
 const reportDownloads = (jobs: ReturnType<DownloadQueue['snapshot']>) => { void library.syncDownloads(jobs).then(() => changed('library')); publish({ type: 'downloads', jobs }) }
@@ -38,6 +39,7 @@ const analysis = new AnalysisService(db, codex, () => changed('analysis')), publ
 const hypitConfig = new HypitConfigStore()
 const hypitCli = new HypitCliService(hypitConfig)
 const remake = new RemakeService(db, library, codex, hypitConfig, () => changed('remake'))
+const subscriptions = new SubscriptionService(db, media, queue, config, () => changed('subscriptions'))
 const youtubeCookies = new YoutubeCookieService()
 const port = Number(process.env.PORT || 3000), host = process.env.HOST || '0.0.0.0'
 const clientDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../client')
@@ -153,6 +155,30 @@ async function api(request: IncomingMessage, response: ServerResponse, url: URL)
   const cancelBatch = request.method === 'POST' && pathname.match(/^\/api\/publisher\/batches\/([^/]+)\/cancel$/); if (cancelBatch) { publisher.cancelBatch(cancelBatch[1]); return json(response, 200, null) }
   if (request.method === 'DELETE' && pathname === '/api/publisher/batches') return json(response, 200, { count: await publisher.clearHistory() })
   const deleteBatch = request.method === 'DELETE' && pathname.match(/^\/api\/publisher\/batches\/([^/]+)$/); if (deleteBatch) { await publisher.deleteBatch(deleteBatch[1]); return json(response, 200, null) }
+  if (request.method === 'GET' && pathname === '/api/subscriptions') return json(response, 200, subscriptions.list())
+  if (request.method === 'POST' && pathname === '/api/subscriptions') {
+    const value = await body<{ sourceUrl: string; autoDownload?: boolean }>(request)
+    return json(response, 201, await subscriptions.create(String(value.sourceUrl || ''), Boolean(value.autoDownload)))
+  }
+  if (request.method === 'GET' && pathname === '/api/subscriptions/schedule') return json(response, 200, subscriptions.schedule())
+  if (request.method === 'PATCH' && pathname === '/api/subscriptions/schedule') {
+    const value = await body<{ enabled?: boolean; hour?: number; minute?: number }>(request)
+    return json(response, 200, subscriptions.updateSchedule(value))
+  }
+  if (request.method === 'POST' && pathname === '/api/subscriptions/poll') return json(response, 202, await subscriptions.pollNow())
+  if (request.method === 'GET' && pathname === '/api/subscriptions/notifications') return json(response, 200, { notifications: subscriptions.notifications(), unreadCount: db.unreadNotificationCount(), schedule: subscriptions.schedule() })
+  if (request.method === 'POST' && pathname === '/api/subscriptions/notifications/read') {
+    const value = await body<{ ids?: string[]; all?: boolean }>(request)
+    return json(response, 200, subscriptions.markRead(Array.isArray(value.ids) ? value.ids : undefined, Boolean(value.all)))
+  }
+  if (request.method === 'GET' && pathname === '/api/subscriptions/status') return json(response, 200, subscriptions.status())
+  const subscriptionPatch = request.method === 'PATCH' && pathname.match(/^\/api\/subscriptions\/([^/]+)$/)
+  if (subscriptionPatch) {
+    const value = await body<{ autoDownload?: boolean; enabled?: boolean; displayName?: string }>(request)
+    return json(response, 200, subscriptions.update(subscriptionPatch[1], value))
+  }
+  const subscriptionDelete = request.method === 'DELETE' && pathname.match(/^\/api\/subscriptions\/([^/]+)$/)
+  if (subscriptionDelete) { subscriptions.remove(subscriptionDelete[1]); return json(response, 200, null) }
   return json(response, 404, { error: '接口不存在' })
 }
 

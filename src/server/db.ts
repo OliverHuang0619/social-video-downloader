@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import type { AnalysisJob, AnalysisResult, DownloadJob, MediaAsset, PublishBatch, PublishJob, RemakeJob } from '../shared/types'
+import type { AnalysisJob, AnalysisResult, CreatorSubscription, DownloadJob, MediaAsset, Platform, PublishBatch, PublishJob, RemakeJob, SubscriptionNotification } from '../shared/types'
 
 const configDir = process.env.SVD_CONFIG_DIR || path.join(process.cwd(), 'config')
 mkdirSync(configDir, { recursive: true })
@@ -40,6 +40,20 @@ export class AppDatabase {
       CREATE TABLE IF NOT EXISTS download_jobs (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS remake_jobs (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, event TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS creator_subscriptions (
+        id TEXT PRIMARY KEY, platform TEXT NOT NULL, source_url TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL,
+        auto_download INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1,
+        last_polled_at TEXT, last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS subscription_seen_items (
+        subscription_id TEXT NOT NULL REFERENCES creator_subscriptions(id) ON DELETE CASCADE,
+        media_key TEXT NOT NULL, PRIMARY KEY (subscription_id, media_key)
+      );
+      CREATE TABLE IF NOT EXISTS subscription_notifications (
+        id TEXT PRIMARY KEY, subscription_id TEXT NOT NULL REFERENCES creator_subscriptions(id) ON DELETE CASCADE,
+        media_key TEXT NOT NULL, title TEXT NOT NULL, source_url TEXT NOT NULL, thumbnail TEXT,
+        download_job_id TEXT, read_at TEXT, created_at TEXT NOT NULL
+      );
     `)
     const analysisColumns = new Set((this.sqlite.prepare('PRAGMA table_info(analysis_jobs)').all() as { name: string }[]).map(column => column.name))
     if (!analysisColumns.has('detail_json')) this.sqlite.exec("ALTER TABLE analysis_jobs ADD COLUMN detail_json TEXT NOT NULL DEFAULT '{}'")
@@ -182,5 +196,103 @@ export class AppDatabase {
       if (this.deletePublishBatch(batch.id)) count += 1
     }
     return count
+  }
+
+  private mapSubscription(row: Record<string, unknown>): CreatorSubscription {
+    return {
+      id: String(row.id), platform: row.platform as Platform, sourceUrl: String(row.source_url), displayName: String(row.display_name),
+      autoDownload: Boolean(row.auto_download), enabled: Boolean(row.enabled),
+      lastPolledAt: row.last_polled_at ? String(row.last_polled_at) : undefined,
+      lastError: row.last_error ? String(row.last_error) : undefined,
+      createdAt: String(row.created_at), updatedAt: String(row.updated_at),
+    }
+  }
+  subscriptions() {
+    return (this.sqlite.prepare('SELECT * FROM creator_subscriptions ORDER BY created_at DESC').all() as Record<string, unknown>[]).map(row => this.mapSubscription(row))
+  }
+  subscription(id: string) {
+    const row = this.sqlite.prepare('SELECT * FROM creator_subscriptions WHERE id=?').get(id) as Record<string, unknown> | undefined
+    return row ? this.mapSubscription(row) : undefined
+  }
+  subscriptionByUrl(sourceUrl: string) {
+    const row = this.sqlite.prepare('SELECT * FROM creator_subscriptions WHERE source_url=?').get(sourceUrl) as Record<string, unknown> | undefined
+    return row ? this.mapSubscription(row) : undefined
+  }
+  createSubscription(value: Omit<CreatorSubscription, 'createdAt' | 'updatedAt' | 'lastPolledAt' | 'lastError'> & Partial<Pick<CreatorSubscription, 'lastPolledAt' | 'lastError'>>) {
+    const now = new Date().toISOString()
+    this.sqlite.prepare(`INSERT INTO creator_subscriptions(id,platform,source_url,display_name,auto_download,enabled,last_polled_at,last_error,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?)`).run(value.id, value.platform, value.sourceUrl, value.displayName, value.autoDownload ? 1 : 0, value.enabled ? 1 : 0, value.lastPolledAt || null, value.lastError || null, now, now)
+    return this.subscription(value.id)!
+  }
+  updateSubscription(id: string, values: Partial<Pick<CreatorSubscription, 'displayName' | 'autoDownload' | 'enabled' | 'lastPolledAt' | 'lastError'>>) {
+    const current = this.subscription(id); if (!current) return undefined
+    const next = {
+      displayName: values.displayName ?? current.displayName,
+      autoDownload: values.autoDownload ?? current.autoDownload,
+      enabled: values.enabled ?? current.enabled,
+      lastPolledAt: 'lastPolledAt' in values ? values.lastPolledAt : current.lastPolledAt,
+      lastError: 'lastError' in values ? values.lastError : current.lastError,
+    }
+    this.sqlite.prepare('UPDATE creator_subscriptions SET display_name=?,auto_download=?,enabled=?,last_polled_at=?,last_error=?,updated_at=? WHERE id=?')
+      .run(next.displayName, next.autoDownload ? 1 : 0, next.enabled ? 1 : 0, next.lastPolledAt || null, next.lastError || null, new Date().toISOString(), id)
+    return this.subscription(id)
+  }
+  deleteSubscription(id: string) {
+    return this.sqlite.prepare('DELETE FROM creator_subscriptions WHERE id=?').run(id).changes > 0
+  }
+  seenKeys(subscriptionId: string) {
+    return new Set((this.sqlite.prepare('SELECT media_key FROM subscription_seen_items WHERE subscription_id=?').all(subscriptionId) as { media_key: string }[]).map(row => row.media_key))
+  }
+  markSeen(subscriptionId: string, mediaKeys: string[]) {
+    if (!mediaKeys.length) return
+    const insert = this.sqlite.prepare('INSERT OR IGNORE INTO subscription_seen_items(subscription_id,media_key) VALUES(?,?)')
+    this.sqlite.exec('BEGIN')
+    try {
+      for (const key of mediaKeys) insert.run(subscriptionId, key)
+      this.sqlite.exec('COMMIT')
+    } catch (error) { this.sqlite.exec('ROLLBACK'); throw error }
+  }
+  private mapNotification(row: Record<string, unknown>): SubscriptionNotification {
+    return {
+      id: String(row.id), subscriptionId: String(row.subscription_id), mediaKey: String(row.media_key),
+      title: String(row.title), sourceUrl: String(row.source_url),
+      thumbnail: row.thumbnail ? String(row.thumbnail) : undefined,
+      downloadJobId: row.download_job_id ? String(row.download_job_id) : undefined,
+      readAt: row.read_at ? String(row.read_at) : undefined, createdAt: String(row.created_at),
+      displayName: row.display_name ? String(row.display_name) : undefined,
+      platform: row.platform ? row.platform as Platform : undefined,
+    }
+  }
+  createNotification(value: Omit<SubscriptionNotification, 'createdAt' | 'readAt' | 'displayName' | 'platform'> & Partial<Pick<SubscriptionNotification, 'readAt' | 'downloadJobId'>>) {
+    const now = new Date().toISOString()
+    this.sqlite.prepare(`INSERT INTO subscription_notifications(id,subscription_id,media_key,title,source_url,thumbnail,download_job_id,read_at,created_at)
+      VALUES(?,?,?,?,?,?,?,?,?)`).run(value.id, value.subscriptionId, value.mediaKey, value.title, value.sourceUrl, value.thumbnail || null, value.downloadJobId || null, value.readAt || null, now)
+    return this.notification(value.id)!
+  }
+  setNotificationDownloadJob(id: string, downloadJobId: string) {
+    this.sqlite.prepare('UPDATE subscription_notifications SET download_job_id=? WHERE id=?').run(downloadJobId, id)
+  }
+  notification(id: string) {
+    const row = this.sqlite.prepare(`SELECT n.*, s.display_name, s.platform FROM subscription_notifications n
+      LEFT JOIN creator_subscriptions s ON s.id=n.subscription_id WHERE n.id=?`).get(id) as Record<string, unknown> | undefined
+    return row ? this.mapNotification(row) : undefined
+  }
+  notifications(limit = 100) {
+    return (this.sqlite.prepare(`SELECT n.*, s.display_name, s.platform FROM subscription_notifications n
+      LEFT JOIN creator_subscriptions s ON s.id=n.subscription_id ORDER BY n.created_at DESC LIMIT ?`).all(limit) as Record<string, unknown>[]).map(row => this.mapNotification(row))
+  }
+  unreadNotificationCount() {
+    return Number((this.sqlite.prepare('SELECT COUNT(*) AS count FROM subscription_notifications WHERE read_at IS NULL').get() as { count: number }).count)
+  }
+  markNotificationsRead(ids?: string[], all = false) {
+    const now = new Date().toISOString()
+    if (all) return this.sqlite.prepare('UPDATE subscription_notifications SET read_at=? WHERE read_at IS NULL').run(now).changes
+    if (!ids?.length) return 0
+    const placeholders = ids.map(() => '?').join(',')
+    return this.sqlite.prepare(`UPDATE subscription_notifications SET read_at=? WHERE id IN (${placeholders}) AND read_at IS NULL`).run(now, ...ids).changes
+  }
+  assetBySourceUrl(sourceUrl: string) {
+    const row = this.sqlite.prepare('SELECT * FROM media_assets WHERE source_url=?').get(sourceUrl) as Record<string, unknown> | undefined
+    return row ? this.mapAsset(row) : undefined
   }
 }
