@@ -11,11 +11,14 @@ import './compact-library.css'
 
 type Tab = 'download' | 'library' | 'tasks' | 'settings'
 type TaskTab = 'analysis' | 'remake' | 'publisher'
+type SettingsTab = 'tools' | 'codex' | 'hypit' | 'browser' | 'security'
 const NAVIGATION_STORAGE_KEY = 'social-video-workbench:navigation:v1'
 const TASK_TAB_STORAGE_KEY = 'social-video-workbench:task-tab:v1'
+const SETTINGS_TAB_STORAGE_KEY = 'social-video-workbench:settings-tab:v1'
 const LIBRARY_DIRECTORY_STORAGE_KEY = 'social-video-workbench:library-directory:v1'
 const tabs = new Set<Tab>(['download', 'library', 'tasks', 'settings'])
 const taskTabs = new Set<TaskTab>(['analysis', 'remake', 'publisher'])
+const settingsTabs = new Set<SettingsTab>(['tools', 'codex', 'hypit', 'browser', 'security'])
 function storedChoice<T extends string>(key: string, allowed: Set<T>, fallback: T) {
   try { const value = window.localStorage.getItem(key) as T | null; return value && allowed.has(value) ? value : fallback } catch { return fallback }
 }
@@ -850,15 +853,30 @@ function HypitSettingsPanel({ config, refresh }: { config: HypitStatus | null; r
 }
 
 function SettingsPage({ tools, codex, hypit, browser, refresh, logout }: { tools: ToolStatus | null; codex: CodexStatus | null; hypit: HypitStatus | null; browser: BrowserStatus | null; refresh: () => void; logout: () => void }) {
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>(() => storedChoice(SETTINGS_TAB_STORAGE_KEY, settingsTabs, 'codex'))
   const official = !codex || codex.mode === 'official'
-  return <div className="settings-grid">
-    <section className="panel settings-section">
+  useEffect(() => { try { window.localStorage.setItem(SETTINGS_TAB_STORAGE_KEY, settingsTab) } catch { /* storage unavailable */ } }, [settingsTab])
+  return <section className="panel task-panel settings-panel">
+    <div className="task-tabs settings-tabs" role="tablist" aria-label="设置分类">
+      {([
+        ['tools', '运行工具', '下载与转码 CLI'],
+        ['codex', 'Codex', '视频分析连接'],
+        ['hypit', 'Hypit', '生成服务配置'],
+        ['browser', '抖音浏览器', '登录与远程桌面'],
+        ['security', '安全', '会话与退出'],
+      ] as const).map(([id, label, hint]) => (
+        <button key={id} role="tab" aria-selected={settingsTab === id} className={settingsTab === id ? 'active' : ''} onClick={() => setSettingsTab(id)}>
+          <strong>{label}</strong><span>{hint}</span>
+        </button>
+      ))}
+    </div>
+    {settingsTab === 'tools' ? <div className="settings-section" role="tabpanel">
       <h2>运行工具</h2>
       <p>下载与转码依赖的命令行工具。</p>
       {tools?.tools.map(tool => <div className="status-row" key={tool.name}><span>{tool.name}</span><span className={`pill ${tool.available ? 'ready' : 'failed'}`} title={tool.version || tool.error}>{tool.available ? shortVersion(tool.version) : '不可用'}</span></div>)}
       <button onClick={() => void api.tools.update().then(refresh)}>安装 / 更新工具</button>
-    </section>
-    <section className="panel settings-section codex-settings">
+    </div> : null}
+    {settingsTab === 'codex' ? <div className="settings-section codex-settings" role="tabpanel">
       <h2>Codex 视频分析</h2>
       <p>{codex?.message || '正在检查…'}</p>
       {codex ? <CodexRuntimeStatus status={codex} /> : null}
@@ -870,23 +888,23 @@ function SettingsPage({ tools, codex, hypit, browser, refresh, logout }: { tools
         {official && codex?.authenticated ? <button onClick={() => void api.codex.logout().then(refresh)}>退出 Codex</button> : null}
       </div>
       {!official ? <p className="muted">当前为非官方模式，设备码登录已禁用。切换回「官方 ChatGPT」可恢复登录态（不会因切换丢失）。</p> : null}
-    </section>
-    <section className="panel settings-section">
+    </div> : null}
+    {settingsTab === 'hypit' ? <div className="settings-section" role="tabpanel">
       <h2>Hypit 生成服务</h2>
       <p>检查 Hypit CLI，并配置 HypiHub / Hypit 的 Base URL 与 API Key，供重新制作「生成成片」使用。</p>
       <HypitSettingsPanel config={hypit} refresh={refresh} />
-    </section>
-    <section className="panel settings-section">
+    </div> : null}
+    {settingsTab === 'browser' ? <div className="settings-section" role="tabpanel">
       <h2>抖音浏览器</h2>
       <p>{browser?.message || '正在检查…'}</p>
       <div className="row"><a className="button" target="_blank" rel="noreferrer" href={browser?.remoteUrl || '/remote-browser/vnc.html?autoconnect=1&resize=scale'}>{browser?.mode === 'host' ? '打开本地浏览器' : '打开远程浏览器'}</a><button className="primary" disabled={!browser?.ready} onClick={() => void api.publisher.login().then(refresh)}>登录抖音</button></div>
-    </section>
-    <section className="panel settings-section">
+    </div> : null}
+    {settingsTab === 'security' ? <div className="settings-section" role="tabpanel">
       <h2>安全</h2>
       <p>媒体、任务与浏览器均受管理员会话保护。</p>
       <button onClick={logout}>退出工作台</button>
-    </section>
-  </div>
+    </div> : null}
+  </section>
 }
 
 /* ------------------------------------------------------------------ app */

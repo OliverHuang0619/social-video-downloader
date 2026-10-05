@@ -159,10 +159,6 @@
   color: var(--ink-3);
 }
 
-.codex-settings {
-  grid-column: span 2;
-}
-
 .codex-connection {
   display: grid;
   gap: 12px;
@@ -330,10 +326,6 @@
 }
 
 @media (max-width: 1000px) {
-  .codex-settings {
-    grid-column: auto;
-  }
-
   .codex-runtime-grid,
   .codex-form-grid,
   .codex-mode-grid {
