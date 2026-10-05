@@ -14,7 +14,23 @@ import {
   stashOfficialAuth,
   tencentTokenPlanTemplate,
   toPublicConnection,
+  TENCENT_TOKEN_PLAN_BASE_URL,
+  normalizeProviderBaseUrl,
 } from '../src/server/codex-connection'
+import { isCodexProviderModeSelectable, shouldShowCodexProvidersManager } from '../src/shared/codex-connection-ui'
+
+describe('Codex 连接面板可见性', () => {
+  it('任意模式下都展示供应商管理，避免 CC Switch 下无法新建直连供应商', () => {
+    expect(shouldShowCodexProvidersManager('cc_switch')).toBe(true)
+    expect(shouldShowCodexProvidersManager('official')).toBe(true)
+    expect(shouldShowCodexProvidersManager('provider')).toBe(true)
+  })
+
+  it('供应商为空时仍可选中直连模式，以便展示新建入口', () => {
+    expect(isCodexProviderModeSelectable(0)).toBe(true)
+    expect(isCodexProviderModeSelectable(2)).toBe(true)
+  })
+})
 
 describe('Codex 多平台连接辅助', () => {
   it('默认配置为官方模式', () => {
@@ -29,13 +45,23 @@ describe('Codex 多平台连接辅助', () => {
     const provider = tencentTokenPlanTemplate()
     expect(provider).toMatchObject({
       template: 'tencent_token_plan',
-      baseUrl: 'https://tokenhub.tencentmaas.com/plan/v3',
+      baseUrl: TENCENT_TOKEN_PLAN_BASE_URL,
       model: 'tc-code-latest',
       wireApi: 'responses',
       requiresOpenaiAuth: true,
       apiKey: '',
     })
     expect(provider.id).toBeTruthy()
+  })
+
+  it('把腾讯云产品介绍页改写成 Token Plan API 地址', () => {
+    expect(normalizeProviderBaseUrl('https://cloud.tencent.com/product/tokenhub')).toBe(TENCENT_TOKEN_PLAN_BASE_URL)
+    expect(normalizeProviderBaseUrl('https://cloud.tencent.com/document/product/1823/130666', 'tencent_token_plan')).toBe(TENCENT_TOKEN_PLAN_BASE_URL)
+    expect(normalizeProviderBaseUrl('https://tokenhub.tencentmaas.com/plan/v3/')).toBe(TENCENT_TOKEN_PLAN_BASE_URL)
+    expect(mergeProviderUpdate(
+      tencentTokenPlanTemplate({ id: 'p1', apiKey: 'x', baseUrl: TENCENT_TOKEN_PLAN_BASE_URL }),
+      { baseUrl: 'https://cloud.tencent.com/product/tokenhub' },
+    ).baseUrl).toBe(TENCENT_TOKEN_PLAN_BASE_URL)
   })
 
   it('打码 API Key 并生成公开视图', () => {

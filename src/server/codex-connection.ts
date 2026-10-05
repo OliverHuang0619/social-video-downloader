@@ -13,9 +13,27 @@ export const DEFAULT_CC_SWITCH_BASE_URL = 'http://host.docker.internal:15721/v1'
 export const DEFAULT_CC_SWITCH_MODEL = 'tc-code-latest'
 export const OFFICIAL_AUTH_STASH = 'official-auth.stash.json'
 export const CONNECTION_FILE = 'codex-providers.json'
+export const TENCENT_TOKEN_PLAN_BASE_URL = 'https://tokenhub.tencentmaas.com/plan/v3'
 
-const TENCENT_BASE = 'https://tokenhub.tencentmaas.com/plan/v3'
 const TENCENT_MODEL = 'tc-code-latest'
+
+export function isTencentCloudDocsUrl(url: string) {
+  try {
+    const parsed = new URL(url)
+    return parsed.hostname === 'cloud.tencent.com' && /^\/(product|document)\b/i.test(parsed.pathname)
+  } catch {
+    return false
+  }
+}
+
+/** 产品介绍/文档页不能当 Codex Base URL；Token Plan 模板空值回退到官方 API。 */
+export function normalizeProviderBaseUrl(baseUrl: string, template?: CodexProvider['template']) {
+  const trimmed = baseUrl.trim().replace(/\/+$/, '')
+  if (isTencentCloudDocsUrl(trimmed) || (template === 'tencent_token_plan' && !trimmed)) {
+    return TENCENT_TOKEN_PLAN_BASE_URL
+  }
+  return trimmed
+}
 
 export function defaultConnectionConfig(): CodexConnectionConfig {
   return {
@@ -30,7 +48,7 @@ export function tencentTokenPlanTemplate(partial: Partial<CodexProvider> = {}): 
     id: partial.id || randomUUID(),
     name: partial.name || '腾讯 Token Plan',
     template: 'tencent_token_plan',
-    baseUrl: partial.baseUrl || TENCENT_BASE,
+    baseUrl: normalizeProviderBaseUrl(partial.baseUrl || TENCENT_TOKEN_PLAN_BASE_URL, 'tencent_token_plan'),
     apiKey: partial.apiKey || '',
     model: partial.model || TENCENT_MODEL,
     reasoningEffort: partial.reasoningEffort || 'high',
@@ -68,13 +86,15 @@ export function toPublicConnection(config: CodexConnectionConfig): CodexConnecti
 
 export function mergeProviderUpdate(existing: CodexProvider, patch: Partial<CodexProvider>): CodexProvider {
   const nextKey = patch.apiKey
-  return {
+  const merged: CodexProvider = {
     ...existing,
     ...patch,
     id: existing.id,
     wireApi: 'responses',
     apiKey: nextKey === undefined || nextKey === '' ? existing.apiKey : nextKey,
   }
+  merged.baseUrl = normalizeProviderBaseUrl(merged.baseUrl, merged.template)
+  return merged
 }
 
 export function resolveActiveModel(
@@ -172,7 +192,7 @@ export function renderCodexToml(input: {
     '',
     '[model_providers.custom]',
     `name = ${escapeTomlString(provider.name || 'custom')}`,
-    `base_url = ${escapeTomlString(provider.baseUrl)}`,
+    `base_url = ${escapeTomlString(normalizeProviderBaseUrl(provider.baseUrl, provider.template))}`,
     'wire_api = "responses"',
     `requires_openai_auth = ${provider.requiresOpenaiAuth ? 'true' : 'false'}`,
     ...(provider.apiKey.trim() ? [`experimental_bearer_token = ${escapeTomlString(provider.apiKey.trim())}`] : []),
@@ -220,7 +240,7 @@ function normalizeLoaded(raw: Partial<CodexConnectionConfig> | null | undefined)
       id: String(provider.id || randomUUID()),
       name: String(provider.name || '未命名供应商'),
       template: provider.template === 'tencent_token_plan' ? 'tencent_token_plan' as const : provider.template === 'custom' ? 'custom' as const : undefined,
-      baseUrl: String(provider.baseUrl || ''),
+      baseUrl: normalizeProviderBaseUrl(String(provider.baseUrl || ''), provider.template === 'tencent_token_plan' ? 'tencent_token_plan' : provider.template === 'custom' ? 'custom' : undefined),
       apiKey: String(provider.apiKey || ''),
       model: String(provider.model || ''),
       reasoningEffort: provider.reasoningEffort ? String(provider.reasoningEffort) : undefined,
@@ -250,7 +270,12 @@ export class CodexConnectionStore {
 
   async load() {
     try {
-      this.data = normalizeLoaded(JSON.parse(await readFile(this.file, 'utf8')) as Partial<CodexConnectionConfig>)
+      const raw = JSON.parse(await readFile(this.file, 'utf8')) as Partial<CodexConnectionConfig>
+      const next = normalizeLoaded(raw)
+      this.data = next
+      const rawUrls = (raw.providers || []).map(item => String(item.baseUrl || ''))
+      const nextUrls = next.providers.map(item => item.baseUrl)
+      if (JSON.stringify(rawUrls) !== JSON.stringify(nextUrls)) await this.save(next)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       this.data = defaultConnectionConfig()

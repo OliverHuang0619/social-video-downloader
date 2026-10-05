@@ -2,6 +2,7 @@ import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom'
 import type { AnalysisJob, BrowserStatus, CodexConnectionPublic, CodexProviderPublic, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, DownloadJob, DownloadOptions, HypitStatus, MediaAsset, MediaFileHash, MediaFileMetadata, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, QuickTimeQuality, RemakeJob, ToolStatus } from '../../shared/types'
 import { automaticPlatformPublishTimes, filterMediaAssets, mediaAssetDirectory, normalizePublishTopics, type LibraryStateFilter } from '../../shared/core'
+import { isCodexProviderModeSelectable, shouldShowCodexProvidersManager } from '../../shared/codex-connection-ui'
 import { DEFAULT_HYPIT_REMAKE_DIRECTION } from '../../shared/remake-direction'
 import { api, onEvent, type WorkbenchEvent } from './api'
 import './styles.css'
@@ -753,7 +754,7 @@ function CodexConnectionPanel({ connection, refresh }: { connection: CodexConnec
         ['cc_switch', 'CC Switch 代理', '经宿主本地代理转发，由 CC Switch 选上游'],
       ] as const).map(([value, label, hint]) => (
         <label key={value} className={`codex-mode ${mode === value ? 'selected' : ''}`}>
-          <input type="radio" name="codex-mode" value={value} checked={mode === value} disabled={busy || (value === 'provider' && !connection.providers.length)} onChange={() => setMode(value)} />
+          <input type="radio" name="codex-mode" value={value} checked={mode === value} disabled={busy || (value === 'provider' && !isCodexProviderModeSelectable(connection.providers.length))} onChange={() => setMode(value)} />
           <span><strong>{label}</strong><small>{hint}</small></span>
         </label>
       ))}
@@ -773,26 +774,27 @@ function CodexConnectionPanel({ connection, refresh }: { connection: CodexConnec
       <label>代理模型<input value={ccSwitchModel} onChange={event => setCcSwitchModel(event.target.value)} placeholder="tc-code-latest" /></label>
     </div> : null}
 
-    {mode === 'cc_switch' ? <p className="muted">CC Switch 模式不需要在工作台里再建供应商，上游由本机 CC Switch 选择。把代理模型改成腾讯侧实际模型（如 <code>tc-code-latest</code> 或 <code>deepseek-v4-pro</code>）后点「应用连接模式」或「测试连通」。</p> : null}
+    {mode === 'cc_switch' ? <p className="muted">CC Switch 模式不需要在工作台里再建供应商，上游由本机 CC Switch 选择。把代理模型改成腾讯侧实际模型（如 <code>tc-code-latest</code> 或 <code>deepseek-v4-pro</code>）后点「应用连接模式」或「测试连通」。若要改用直连，请在下方新建供应商并「设为当前并直连」。</p> : null}
 
-    {mode !== 'cc_switch' ? <div className="codex-providers">
+    {shouldShowCodexProvidersManager(mode) ? <div className="codex-providers">
       <div className="row between">
         <h3>供应商</h3>
         <div className="row">
-          <button disabled={busy} onClick={() => void run(async () => { const created = await api.codex.createProvider({ template: 'tencent_token_plan' }); setSelectedId(created.id) }, '已创建腾讯 Token Plan 模板')}>从腾讯模板新建</button>
-          <button disabled={busy} onClick={() => void run(async () => { const created = await api.codex.createProvider({ name: '自定义供应商', baseUrl: '', model: 'gpt-5.6-sol' }); setSelectedId(created.id) }, '已创建自定义供应商')}>新建自定义</button>
+          <button disabled={busy} onClick={() => void run(async () => { const created = await api.codex.createProvider({ template: 'tencent_token_plan' }); setSelectedId(created.id) }, '已创建腾讯 Token Plan 模板，请填写 API Key 后保存并直连')}>从腾讯模板新建</button>
+          <button disabled={busy} onClick={() => void run(async () => { const created = await api.codex.createProvider({ name: '自定义供应商', baseUrl: '', model: 'gpt-5.6-sol' }); setSelectedId(created.id) }, '已创建自定义供应商，请填写 Base URL 与 API Key')}>新建自定义</button>
         </div>
       </div>
       {connection.providers.length ? <select value={selectedId} onChange={event => setSelectedId(event.target.value)}>
         {connection.providers.map((provider: CodexProviderPublic) => <option key={provider.id} value={provider.id}>{provider.name}{provider.apiKeyConfigured ? '' : '（未配置 Key）'}{provider.id === connection.activeProviderId ? ' · 当前' : ''}</option>)}
-      </select> : <p className="muted">还没有供应商。直连模式需要先从腾讯模板新建并填写 API Key。</p>}
+      </select> : <p className="muted">还没有供应商。请先「从腾讯模板新建」或「新建自定义」，填写 API Key 后点「设为当前并直连」。</p>}
       {selected ? <div className="codex-form-grid">
         <label>名称<input value={name} onChange={event => setName(event.target.value)} /></label>
-        <label>Base URL<input value={baseUrl} onChange={event => setBaseUrl(event.target.value)} /></label>
+        <label>Base URL<input value={baseUrl} onChange={event => setBaseUrl(event.target.value)} placeholder="https://tokenhub.tencentmaas.com/plan/v3" /></label>
         <label>API Key<input type="password" value={apiKey} onChange={event => setApiKey(event.target.value)} placeholder={selected.apiKeyConfigured ? selected.apiKeyMasked || '已配置，留空不修改' : '粘贴 API Key'} /></label>
         <label>模型<input value={model} onChange={event => setModel(event.target.value)} /></label>
         <label>推理强度<select value={reasoningEffort} onChange={event => setReasoningEffort(event.target.value)}><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label>
       </div> : null}
+      {selected ? <p className="muted">Token Plan 的 API 地址是 <code>https://tokenhub.tencentmaas.com/plan/v3</code>，不要填 <code>cloud.tencent.com</code> 产品介绍页。保存时会自动纠正。</p> : null}
       {selected ? <div className="row">
         <button className="primary" disabled={busy} onClick={() => void run(() => api.codex.updateProvider(selected.id, { name, baseUrl, model, reasoningEffort, ...(apiKey ? { apiKey } : {}) }))}>保存供应商</button>
         <button disabled={busy} onClick={() => void run(() => api.codex.updateConnection({ mode: 'provider', activeProviderId: selected.id }))}>设为当前并直连</button>
