@@ -2,6 +2,7 @@ import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom'
 import type { AnalysisJob, BrowserStatus, CodexConnectionPublic, CodexProviderPublic, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, CreatorSubscription, DownloadJob, DownloadOptions, HypitStatus, LocalFileActionsStatus, MediaAsset, MediaFileHash, MediaFileMetadata, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, QuickTimeQuality, RemakeJob, SubscriptionNotification, SubscriptionSchedule, ToolStatus } from '../../shared/types'
 import { automaticPlatformPublishTimes, filterMediaAssets, isRemakeMediaPath, mediaAssetDirectory, normalizePublishTopics, type LibraryStateFilter } from '../../shared/core'
+import { DOUYIN_PUBLISH_PLATFORM, MULTIPOST_PLATFORMS, publishPlatformLabel } from '../../shared/multipost-platforms'
 import { isCodexProviderModeSelectable, shouldShowCodexProvidersManager } from '../../shared/codex-connection-ui'
 import { DEFAULT_HYPIT_REMAKE_DIRECTION } from '../../shared/remake-direction'
 import { api, onEvent, type WorkbenchEvent } from './api'
@@ -328,32 +329,73 @@ function DownloadPage({ jobs, setJobs }: { jobs: DownloadJob[]; setJobs: (jobs: 
 /* -------------------------------------------------------------- publish */
 
 function PublishDialog({ assets, close, done }: { assets: MediaAsset[]; close: () => void; done: () => void }) {
-  const single = assets.length === 1, [dispatchMode, setDispatch] = useState<'platform' | 'local'>('platform'), [scheduled, setScheduled] = useState(!single), [start, setStart] = useState(''), [interval, setIntervalValue] = useState(1), [title, setTitle] = useState(assets[0]?.analysis?.englishTitle.slice(0, 30) || assets[0]?.filename.slice(0, 30) || ''), [topics, setTopics] = useState(normalizePublishTopics(assets[0]?.analysis?.englishTitle.slice(0, 30) || assets[0]?.filename.slice(0, 30) || '', assets[0]?.analysis?.keyTopics || []).join(' ')), [aigc, setAigc] = useState(true), [waitForCovers, setWaitForCovers] = useState(false), [message, setMessage] = useState('')
+  const single = assets.length === 1
+  const [platforms, setPlatforms] = useState<string[]>([DOUYIN_PUBLISH_PLATFORM])
+  const douyinSelected = platforms.includes(DOUYIN_PUBLISH_PLATFORM)
+  const titleLimit = douyinSelected ? 30 : 100
+  const [dispatchMode, setDispatch] = useState<'platform' | 'local'>('platform')
+  const [scheduled, setScheduled] = useState(!single)
+  const [start, setStart] = useState('')
+  const [interval, setIntervalValue] = useState(1)
+  const [title, setTitle] = useState(assets[0]?.analysis?.englishTitle.slice(0, 30) || assets[0]?.filename.slice(0, 30) || '')
+  const [topics, setTopics] = useState(normalizePublishTopics(assets[0]?.analysis?.englishTitle.slice(0, 30) || assets[0]?.filename.slice(0, 30) || '', assets[0]?.analysis?.keyTopics || []).join(' '))
+  const [aigc, setAigc] = useState(true)
+  const [waitForCovers, setWaitForCovers] = useState(false)
+  const [message, setMessage] = useState('')
   const topicCount = topics.split(/[#\s,，]+/).filter(Boolean).length
-  const submit = async () => { const startDate = start ? new Date(start) : undefined; const automatic = !single && dispatchMode === 'platform' && !start, automaticTimes = automatic ? automaticPlatformPublishTimes(assets.length, interval) : []; if (scheduled && ((!startDate && !automatic) || (startDate && Number.isNaN(startDate.getTime())))) return setMessage('请选择有效的首条发布时间'); const jobs = assets.map((asset, index) => ({ assetId: asset.id, title: single ? title : (asset.analysis?.englishTitle || asset.filename).slice(0, 30), topics: (single ? topics.split(/[#\s,，]+/) : asset.analysis?.keyTopics || ['英语学习']).filter(Boolean).slice(0, 5), publishAt: startDate ? new Date(startDate.getTime() + index * interval * 3600_000).toISOString() : automaticTimes[index], aigc, waitForCovers })); const action = dispatchMode === 'local' ? '创建本地定时发布队列' : automatic ? '立即发布首条并按配置间隔提交其余抖音平台排期' : scheduled ? '立即提交抖音平台排期' : '立即公开发布'; if (!window.confirm(`即将${action} ${jobs.length} 个视频；浏览器每次提交将随机间隔 1–3 分钟，是否继续？`)) return; try { await api.publisher.publish({ jobs, dispatchMode, idempotencyKey: crypto.randomUUID() }); toast(`已创建 ${jobs.length} 个发布任务`); done() } catch (error) { setMessage(errorText(error)) } }
+  const choices = [{ id: DOUYIN_PUBLISH_PLATFORM, label: '抖音' }, ...MULTIPOST_PLATFORMS]
+  const togglePlatform = (id: string) => setPlatforms(current => {
+    const next = current.includes(id) ? current.filter(item => item !== id) : [...current, id]
+    if (!next.length) return current
+    if (!next.includes(DOUYIN_PUBLISH_PLATFORM) || next.length > 1) setDispatch('platform')
+    return next
+  })
+  const submit = async () => {
+    if (!platforms.length) return setMessage('请至少选择一个平台')
+    const startDate = start ? new Date(start) : undefined
+    const mode = douyinSelected && platforms.length === 1 ? dispatchMode : 'platform'
+    const automatic = !single && douyinSelected && mode === 'platform' && !start
+    const automaticTimes = automatic ? automaticPlatformPublishTimes(assets.length, interval) : []
+    if (scheduled && ((!startDate && !automatic) || (startDate && Number.isNaN(startDate.getTime())))) return setMessage('请选择有效的首条发布时间')
+    const limit = douyinSelected ? 30 : 100
+    const jobs = assets.map((asset, index) => ({ assetId: asset.id, title: single ? title : (asset.analysis?.englishTitle || asset.filename).slice(0, limit), topics: (single ? topics.split(/[#\s,，]+/) : asset.analysis?.keyTopics || ['英语学习']).filter(Boolean).slice(0, 5), publishAt: startDate ? new Date(startDate.getTime() + index * interval * 3600_000).toISOString() : automaticTimes[index], aigc, waitForCovers }))
+    const names = platforms.map(publishPlatformLabel).join('、')
+    const count = jobs.length * platforms.length
+    const action = mode === 'local' ? '创建本地定时发布队列' : automatic ? '立即发布首条并按配置间隔提交其余抖音平台排期' : scheduled ? `提交到${names}` : `立即公开发布到${names}`
+    if (!window.confirm(`即将${action}，共 ${count} 个发布任务；浏览器每次提交将随机间隔 1–3 分钟，是否继续？`)) return
+    try { await api.publisher.publish({ jobs, dispatchMode: mode, platforms, idempotencyKey: crypto.randomUUID() }); toast(`已创建 ${count} 个发布任务`); done() } catch (error) { setMessage(errorText(error)) }
+  }
+  useEffect(() => { if (douyinSelected) setTitle(current => [...current].slice(0, 30).join('')) }, [douyinSelected])
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') close() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [close])
-  return <div className="modal-bg" role="dialog" aria-modal="true" aria-label="发布到抖音" onMouseDown={close}>
+  return <div className="modal-bg" role="dialog" aria-modal="true" aria-label="发布视频" onMouseDown={close}>
     <div className="modal" onMouseDown={event => event.stopPropagation()}>
-      <div className="modal-head"><h2>发布到抖音</h2><p>{single ? (assets[0].analysis?.title || assets[0].filename) : `${assets.length} 个视频，标题与话题取自各自的分析结果`}</p></div>
+      <div className="modal-head"><h2>发布视频</h2><p>{single ? (assets[0].analysis?.title || assets[0].filename) : `${assets.length} 个视频，标题与话题取自各自的分析结果`}</p></div>
+      <fieldset>
+        <legend>发布平台</legend>
+        <div className="platform-picker" role="group" aria-label="发布平台">
+          {choices.map(choice => <button type="button" className={`chip ${platforms.includes(choice.id) ? 'active' : ''}`} aria-pressed={platforms.includes(choice.id)} key={choice.id} onClick={() => togglePlatform(choice.id)}>{choice.label}</button>)}
+        </div>
+      </fieldset>
       {single ? <>
-        <label><span className="label-row">英文标题<span>{title.length} / 30</span></span><input maxLength={30} value={title} onChange={event => setTitle(event.target.value)} /></label>
+        <label><span className="label-row">英文标题<span>{[...title].length} / {titleLimit}</span></span><input maxLength={titleLimit} value={title} onChange={event => setTitle(event.target.value)} /></label>
         <label><span className="label-row">话题<span>{topicCount} / 5</span></span><input value={topics} onChange={event => setTopics(event.target.value)} placeholder="用空格分隔，最多 5 个" /></label>
         <div className="field"><span id="publish-timing">发布时间</span><div className="segmented" role="tablist" aria-labelledby="publish-timing"><button type="button" role="tab" aria-selected={!scheduled} className={scheduled ? '' : 'active'} onClick={() => setScheduled(false)}>立即发布</button><button type="button" role="tab" aria-selected={scheduled} className={scheduled ? 'active' : ''} onClick={() => setScheduled(true)}>定时发布</button></div></div>
-      </> : <label>批量执行方式<select value={dispatchMode} onChange={event => setDispatch(event.target.value as 'platform' | 'local')}><option value="platform">一次性提交到抖音平台排期</option><option value="local">本地到点后逐条提交</option></select></label>}
+      </> : douyinSelected && platforms.length === 1 ? <label>批量执行方式<select value={dispatchMode} onChange={event => setDispatch(event.target.value as 'platform' | 'local')}><option value="platform">一次性提交到抖音平台排期</option><option value="local">本地到点后逐条提交</option></select></label> : <p className="hint">多个平台按队列串行提交，不使用本地定时。</p>}
       {scheduled ? <>
-        <label>{!single && dispatchMode === 'platform' ? '首条发布时间（留空：首条立即发布，其余从至少 2 小时后开始）' : '首条发布时间'}<input type="datetime-local" value={start} onChange={event => setStart(event.target.value)} /></label>
-        {!single ? <label>相邻作品的发布间隔（小时）<input type="number" min="1" value={interval} onChange={event => setIntervalValue(Math.max(1, Number(event.target.value)))} /></label> : null}
+        <label>{!single && douyinSelected ? '首条发布时间（留空：首条立即发布，其余从至少 2 小时后开始）' : !single ? '首条发布时间（留空则全部立即发布）' : '首条发布时间'}<input type="datetime-local" value={start} onChange={event => setStart(event.target.value)} /></label>
+        {!single && (douyinSelected || start) ? <label>相邻作品的发布间隔（小时）<input type="number" min="1" value={interval} onChange={event => setIntervalValue(Math.max(1, Number(event.target.value)))} /></label> : null}
       </> : null}
-      <fieldset>
-        <legend>发布选项</legend>
+      {douyinSelected ? <fieldset>
+        <legend>抖音发布选项</legend>
+        <p className="hint">这些选项只作用于抖音。</p>
         <label className="check"><input type="checkbox" checked={aigc} onChange={event => setAigc(event.target.checked)} />声明“内容由 AI 生成”</label>
         <label className="check"><input type="checkbox" checked={waitForCovers} onChange={event => setWaitForCovers(event.target.checked)} />等待横竖封面生成完成后再提交</label>
-      </fieldset>
-      <p className="warning">将通过可见的浏览器操作抖音创作者中心；相邻作品随机间隔 1–3 分钟提交。遇到验证码或风控会暂停，并在任务页提示需要检查。</p>
+      </fieldset> : null}
+      <p className="warning">将通过可见浏览器依次提交所选平台；相邻任务随机间隔 1–3 分钟。遇到登录、验证码或风控会暂停。没有识别到明确成功结果时，任务会标为需要检查。</p>
       {message ? <p className="error">{message}</p> : null}
       <div className="modal-foot"><button onClick={close}>取消</button><button className="primary" onClick={() => void submit()}>确认发布</button></div>
     </div>
@@ -415,7 +457,7 @@ function DeleteDialog({ assets, close, done }: { assets: MediaAsset[]; close: ()
         <label className="check"><input type="checkbox" checked={deleteFiles} onChange={event => setDeleteFiles(event.target.checked)} />同时删除服务器上的视频文件</label>
         <p className="hint">{deleteFiles ? '文件会从 /downloads 或 /imports 中永久删除。' : '只移出媒体库，文件保留；重新导入目录时会再次登记。'}</p>
       </fieldset>
-      {published ? <p className="warning">其中 {published} 个已标为已处理，可能已发布到抖音。删除不会撤回抖音上的作品。</p> : null}
+      {published ? <p className="warning">其中 {published} 个已标为已处理，可能已经发布。删除不会撤回平台上的作品。</p> : null}
       {message ? <p className="error">{message}</p> : null}
       <div className="modal-foot"><button disabled={busy} onClick={close}>取消</button><button className="danger" disabled={busy} onClick={() => void submit()}>{busy ? '删除中…' : deleteFiles ? `删除 ${assets.length} 个视频及文件` : `移出媒体库`}</button></div>
     </div>
@@ -539,7 +581,7 @@ function LibraryPage({ assets, remakes, reload, openTasks }: { assets: MediaAsse
         <button disabled={!chosen.length} onClick={() => void analyze()}>分析</button>
         <button disabled={!chosen.some(asset => asset.analysis)} onClick={() => void analyze(true)}>重新分析</button>
         <button disabled={!chosen.length} onClick={() => setRemaking(chosen)}>重新制作{chosen.length > 1 ? ` (${chosen.length})` : ''}</button>
-        <button className="primary" disabled={!chosen.length || chosen.some(asset => !asset.analysis)} title={chosen.some(asset => !asset.analysis) ? '所选视频需要先完成分析' : undefined} onClick={() => setPublishing(chosen)}>发布到抖音{chosen.length > 1 ? ` (${chosen.length})` : ''}</button>
+        <button className="primary" disabled={!chosen.length || chosen.some(asset => !asset.analysis)} title={chosen.some(asset => !asset.analysis) ? '所选视频需要先完成分析' : undefined} onClick={() => setPublishing(chosen)}>发布{chosen.length > 1 ? ` (${chosen.length})` : ''}</button>
       </div>
     </section>
     {message && !importOpen ? <p className="error">{message}</p> : null}
@@ -589,11 +631,13 @@ function AnalysisTask({ job, assets, reload }: { job: AnalysisJob; assets: Media
 }
 
 function PublishBatchCard({ batch, reload }: { batch: PublishBatch; reload: () => void }) {
+  const douyinOnly = batch.jobs.every(job => !job.platform || job.platform === 'douyin')
+  const names = [...new Set(batch.jobs.map(job => publishPlatformLabel(job.platform)))].join('、')
   return <article className="batch">
-    <div className="row between"><span className="task-title">{batch.dispatchMode === 'local' ? '本地定时' : '抖音平台排期'} <span className="data muted">· {batch.id.slice(0, 8)} · {new Date(batch.createdAt).toLocaleString()}</span></span><span className="row"><TaskElapsed createdAt={batch.createdAt} updatedAt={batch.updatedAt} active={['queued', 'waiting_local', 'running'].includes(batch.status)} /><span className={`pill ${batch.status}`}>{taskNames[batch.status] || batch.status}</span></span></div>
-    <div className="publish-job publish-job-head"><span>作品</span><span>状态</span><span>本地提交时间</span><span>抖音发布时间</span><span /></div>
+    <div className="row between"><span className="task-title">{batch.dispatchMode === 'local' ? '本地定时' : douyinOnly ? '抖音平台排期' : names} <span className="data muted">· {batch.id.slice(0, 8)} · {new Date(batch.createdAt).toLocaleString()}</span></span><span className="row"><TaskElapsed createdAt={batch.createdAt} updatedAt={batch.updatedAt} active={['queued', 'waiting_local', 'running'].includes(batch.status)} /><span className={`pill ${batch.status}`}>{taskNames[batch.status] || batch.status}</span></span></div>
+    <div className="publish-job publish-job-head"><span>作品</span><span>状态</span><span>本地提交时间</span><span>{douyinOnly ? '抖音发布时间' : '发布时间'}</span><span /></div>
     {batch.jobs.map(job => <div className="publish-job" key={job.id}>
-      <span title={job.title}>{job.title}</span>
+      <span title={job.title}>{publishPlatformLabel(job.platform)} · {job.title}</span>
       <span className={`pill ${job.status}`}>{taskNames[job.status] || job.status}</span>
       <time>{job.submitAt ? new Date(job.submitAt).toLocaleString() : job.executeAt ? new Date(job.executeAt).toLocaleString() : '—'}</time>
       <time>{job.publishAt ? new Date(job.publishAt).toLocaleString() : batch.dispatchMode === 'local' ? '提交后立即发布' : '立即发布'}</time>
@@ -601,7 +645,7 @@ function PublishBatchCard({ batch, reload }: { batch: PublishBatch; reload: () =
       {job.error ? <p className="error">{job.error}</p> : null}
     </div>)}
     <div className="batch-foot">
-      {['queued', 'waiting_local', 'running'].includes(batch.status) ? <button className="danger-text" onClick={() => { if (window.confirm('确认取消该发布批次？已发布到抖音的作品不会撤回，未执行的任务将停止。')) void api.publisher.cancelBatch(batch.id).then(reload) }}>取消批次</button> : null}
+      {['queued', 'waiting_local', 'running'].includes(batch.status) ? <button className="danger-text" onClick={() => { if (window.confirm('确认取消该发布批次？已发布的作品不会撤回，未执行的任务将停止。')) void api.publisher.cancelBatch(batch.id).then(reload) }}>取消批次</button> : null}
       {['completed', 'partial', 'failed', 'needs_attention', 'interrupted', 'cancelled'].includes(batch.status) ? <button className="danger-text" onClick={() => { if (window.confirm('确认删除该批次历史及关联诊断记录？')) void api.publisher.deleteBatch(batch.id).then(reload) }}>删除历史</button> : null}
     </div>
   </article>
@@ -730,7 +774,7 @@ function TasksPage({ analysis, remakes, batches, assets, reload }: { analysis: A
     <div className="task-tabs" role="tablist" aria-label="任务类型">
       <button role="tab" aria-selected={taskTab === 'analysis'} className={taskTab === 'analysis' ? 'active' : ''} onClick={() => setTaskTab('analysis')}><strong>分析任务</strong><span>Codex 逐个执行</span><em>{analysis.length}</em></button>
       <button role="tab" aria-selected={taskTab === 'remake'} className={taskTab === 'remake' ? 'active' : ''} onClick={() => setTaskTab('remake')}><strong>Hypit 重新制作</strong><span>翻拍方案、工程与成片</span><em>{remakes.length}</em></button>
-      <button role="tab" aria-selected={taskTab === 'publisher'} className={taskTab === 'publisher' ? 'active' : ''} onClick={() => setTaskTab('publisher')}><strong>抖音发布任务</strong><span>共用一个浏览器串行提交</span><em>{batches.length}</em></button>
+      <button role="tab" aria-selected={taskTab === 'publisher'} className={taskTab === 'publisher' ? 'active' : ''} onClick={() => setTaskTab('publisher')}><strong>发布任务</strong><span>共用一个浏览器串行提交</span><em>{batches.length}</em></button>
       {taskTab === 'publisher' ? <a target="_blank" rel="noreferrer" href="https://creator.douyin.com/creator-micro/content/manage">在抖音查看作品管理 ↗</a> : null}
     </div>
     {taskTab === 'analysis' ? <>
@@ -740,8 +784,8 @@ function TasksPage({ analysis, remakes, batches, assets, reload }: { analysis: A
       <div className="task-history-actions"><span>共 <span className="data">{remakes.length}</span> 条记录，<span className="data">{remakeHistoryCount}</span> 条已结束</span><button className="danger-text" disabled={!remakeHistoryCount} onClick={() => { if (window.confirm(`确认清除全部 ${remakeHistoryCount} 条已结束的 Hypit 历史？运行中的任务、项目工程与已生成视频将保留。`)) void api.remakes.clearHistory().then(reload) }}>清除已结束的历史</button></div>
       <div className="task-list" role="tabpanel">{remakes.length ? remakes.map(job => <RemakeTask job={job} assets={assets} reload={reload} key={job.id} />) : <div className="empty"><strong>还没有重新制作任务</strong>在媒体库选择视频后点击「重新制作」</div>}</div>
     </> : <>
-      <div className="task-history-actions"><span>共 <span className="data">{batches.length}</span> 条记录，<span className="data">{publishHistoryCount}</span> 条已结束</span><button className="danger-text" disabled={!publishHistoryCount} onClick={() => { if (window.confirm(`确认清除全部 ${publishHistoryCount} 条已结束的发布历史？运行中的批次会保留，已发布到抖音的作品不会撤回。`)) void api.publisher.clearHistory().then(reload) }}>清除已结束的历史</button></div>
-      <div className="task-list" role="tabpanel">{batches.length ? batches.map(batch => <PublishBatchCard batch={batch} reload={reload} key={batch.id} />) : <div className="empty"><strong>还没有发布任务</strong>在媒体库选择已分析的视频后点击「发布到抖音」</div>}</div>
+      <div className="task-history-actions"><span>共 <span className="data">{batches.length}</span> 条记录，<span className="data">{publishHistoryCount}</span> 条已结束</span><button className="danger-text" disabled={!publishHistoryCount} onClick={() => { if (window.confirm(`确认清除全部 ${publishHistoryCount} 条已结束的发布历史？运行中的批次会保留，已发布的作品不会撤回。`)) void api.publisher.clearHistory().then(reload) }}>清除已结束的历史</button></div>
+      <div className="task-list" role="tabpanel">{batches.length ? batches.map(batch => <PublishBatchCard batch={batch} reload={reload} key={batch.id} />) : <div className="empty"><strong>还没有发布任务</strong>在媒体库选择已分析的视频后点击「发布」</div>}</div>
     </>}
   </section>
 }
@@ -1049,7 +1093,7 @@ function SettingsPage({ tools, codex, hypit, browser, refresh, logout }: { tools
         ['codex', 'Codex', '视频分析连接'],
         ['hypit', 'Hypit', '生成服务配置'],
         ['subscriptions', '订阅巡检', '每日扫描时刻'],
-        ['browser', '抖音浏览器', '登录与远程桌面'],
+        ['browser', '发布浏览器', '登录与远程桌面'],
         ['security', '安全', '会话与退出'],
       ] as const).map(([id, label, hint]) => (
         <button key={id} role="tab" aria-selected={settingsTab === id} className={settingsTab === id ? 'active' : ''} onClick={() => setSettingsTab(id)}>
@@ -1083,9 +1127,12 @@ function SettingsPage({ tools, codex, hypit, browser, refresh, logout }: { tools
     </div> : null}
     {settingsTab === 'subscriptions' ? <SubscriptionSettingsPanel /> : null}
     {settingsTab === 'browser' ? <div className="settings-section" role="tabpanel">
-      <h2>抖音浏览器</h2>
+      <h2>发布浏览器</h2>
       <p>{browser?.message || '正在检查…'}</p>
       <div className="row"><a className="button" target="_blank" rel="noreferrer" href={browser?.remoteUrl || '/remote-browser/vnc.html?autoconnect=1&resize=scale'}>{browser?.mode === 'host' ? '打开本地浏览器' : '打开远程浏览器'}</a><button className="primary" disabled={!browser?.ready} onClick={() => void api.publisher.login().then(refresh)}>登录抖音</button></div>
+      <h3>其他平台登录</h3>
+      <p>在同一发布浏览器中打开平台页面并登录，登录态会保留在这个浏览器里。</p>
+      <div className="platform-login-list">{MULTIPOST_PLATFORMS.map(platform => <div className="status-row" key={platform.id}><span>{platform.label}</span><button disabled={!browser?.ready} onClick={() => void api.publisher.login(platform.id).then(refresh)}>打开登录页</button></div>)}</div>
     </div> : null}
     {settingsTab === 'security' ? <div className="settings-section" role="tabpanel">
       <h2>安全</h2>

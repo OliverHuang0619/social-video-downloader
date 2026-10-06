@@ -1,9 +1,10 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { localPublishSubmissionTimes, nextSafePlatformPublishTime, normalizePublishTopics } from '../shared/core'
+import { DOUYIN_TITLE_LIMIT, MULTIPOST_TITLE_LIMIT, isDouyinPublishPlatform, multipostPlatform, publishPlatformLabel, resolvePublishPlatforms } from '../shared/multipost-platforms'
 import type { BrowserStatus, PublishBatch, PublishJob } from '../shared/types'
 import type { AppDatabase } from './db'
 
@@ -28,7 +29,9 @@ export class PublisherService {
   private activeChild?: ChildProcess
   private activeBatchId?: string
   private cancelledBatches = new Set<string>()
-  private script = path.join(process.env.SVD_SKILL_DIR || path.resolve(process.cwd(), 'skills/english-video-catalog'), 'scripts/douyin_publisher.mjs')
+  private skillScripts = path.join(process.env.SVD_SKILL_DIR || path.resolve(process.cwd(), 'skills/english-video-catalog'), 'scripts')
+  private douyinScript = path.join(this.skillScripts, 'douyin_publisher.mjs')
+  private multipostScript = path.join(this.skillScripts, 'multipost_publisher.mjs')
   private artifactDir = path.join(process.env.SVD_CONFIG_DIR || '/config', 'publish-artifacts')
   private tempDir = path.join(process.env.SVD_CONFIG_DIR || '/config', 'publish-temp')
   private browserMode: BrowserStatus['mode'] = process.env.SVD_BROWSER_MODE === 'host' ? 'host' : 'container'
@@ -45,41 +48,59 @@ export class PublisherService {
     const manageUrl = 'https://creator.douyin.com/creator-micro/content/manage'
     return { ready, mode: this.browserMode, loginStatus: this.loginStatus, message: ready ? this.message : this.browserMode === 'host' ? '本地浏览器连接助手未启动' : '远程浏览器不可用', remoteUrl: this.browserMode === 'host' ? manageUrl : '/remote-browser/vnc.html?autoconnect=1&resize=scale', manageUrl }
   }
-  login() {
+  login(platform = 'douyin') {
     if (this.loginRunning) return
-    this.loginRunning = true; this.message = this.browserMode === 'host' ? '请在本地浏览器中扫码登录' : '请在站内远程浏览器中扫码登录'; this.changed()
-    void this.execute(['login'], event => {
+    const target = isDouyinPublishPlatform(platform) ? undefined : multipostPlatform(platform)
+    if (!isDouyinPublishPlatform(platform) && !target) throw new Error('发布平台无效')
+    const label = target?.label
+    this.loginRunning = true
+    this.message = label ? `请在浏览器中登录${label}` : this.browserMode === 'host' ? '请在本地浏览器中扫码登录' : '请在站内远程浏览器中扫码登录'
+    this.changed()
+    const script = target ? this.multipostScript : this.douyinScript
+    const args = target ? ['login', target.homeUrl] : ['login']
+    void this.execute(script, args, event => {
+      if (event.event === 'login_opened' && label) this.message = `已打开${label}登录页，请在浏览器中完成登录`
       if (event.event === 'login_ready') { this.loginStatus = 'ready'; this.message = '抖音创作者中心已登录' }
       if (event.event === 'error') { this.loginStatus = 'needs_attention'; this.message = String(event.message || '登录未完成') }
       this.changed()
     }).finally(() => { this.loginRunning = false; this.changed() })
   }
-  create(jobs: PublishInput[], dispatchMode: PublishBatch['dispatchMode'], idempotencyKey?: string) {
+  create(jobs: PublishInput[], dispatchMode: PublishBatch['dispatchMode'], idempotencyKey?: string, platforms?: string[]) {
     if (!jobs.length) throw new Error('没有可发布的视频')
     if (!['platform', 'local'].includes(dispatchMode)) throw new Error('发布方式无效')
+    const selected = resolvePublishPlatforms(platforms)
+    if (dispatchMode === 'local' && selected.some(platform => !isDouyinPublishPlatform(platform))) throw new Error('本地定时仅用于抖音发布')
     if (dispatchMode === 'local' && jobs.length === 1) throw new Error('本地定时仅用于批量发布')
     if (idempotencyKey) { const existing = this.db.meta(`publish:${idempotencyKey}`); if (existing) return this.db.publishBatches().find(batch => batch.id === existing)! }
     const now = new Date(), id = randomUUID()
+    const expanded = jobs.flatMap((input, index) => selected.map(platform => ({ input, index, platform })))
     const configuredCooldown = process.env.SVD_PUBLISH_COOLDOWN_MS
     const submissionTimes = dispatchMode === 'platform'
       ? configuredCooldown === undefined
-        ? localPublishSubmissionTimes(jobs.length, now)
-        : jobs.map((_, index) => new Date(now.getTime() + index * Math.max(0, Number(configuredCooldown) || 0)).toISOString())
+        ? localPublishSubmissionTimes(expanded.length, now)
+        : expanded.map((_, index) => new Date(now.getTime() + index * Math.max(0, Number(configuredCooldown) || 0)).toISOString())
       : []
-    const items: PublishJob[] = jobs.map((input, index) => {
+    const items: PublishJob[] = expanded.map(({ input, index, platform }, expandedIndex) => {
+      const douyin = isDouyinPublishPlatform(platform)
       const asset = this.db.asset(input.assetId); if (!asset) throw new Error('视频不存在')
       const title = input.title.trim(), topics = normalizePublishTopics(title, input.topics)
-      if (!title || [...title].length > 30) throw new Error('标题必须为 1–30 字符')
+      const limit = douyin ? DOUYIN_TITLE_LIMIT : MULTIPOST_TITLE_LIMIT
+      if (!title || [...title].length > limit) throw new Error(douyin ? '标题必须为 1–30 字符' : '标题必须为 1–100 字符')
       let publishAt: string | undefined, executeAt: string | undefined
       if (input.publishAt) {
         const date = new Date(input.publishAt); if (Number.isNaN(date.getTime())) throw new Error('发布时间无效')
-        const minimum = dispatchMode === 'local' ? 60_000 : 2 * 3600_000
-        if (date.getTime() < now.getTime() + minimum) throw new Error(dispatchMode === 'local' ? '本地定时至少提前 1 分钟' : '平台排期至少提前 2 小时')
-        if (dispatchMode === 'platform' && date.getTime() > now.getTime() + 7 * 24 * 3600_000) throw new Error('平台排期不能超过 7 天')
-        if (dispatchMode === 'local') executeAt = date.toISOString(); else publishAt = date.toISOString()
-      } else if (dispatchMode === 'local' || (jobs.length > 1 && index > 0)) throw new Error('批量发布除首条立即发布外，其余任务必须指定排期时间')
-      const submitAt = dispatchMode === 'local' ? executeAt : submissionTimes[index]
-      return { id: `${id}-${String(index + 1).padStart(3, '0')}`, batchId: id, assetId: asset.id, title, topics, publishAt, executeAt, submitAt, aigc: input.aigc !== false, waitForCovers: input.waitForCovers === true, status: dispatchMode === 'local' ? 'waiting_local' : 'queued' }
+        if (douyin) {
+          const minimum = dispatchMode === 'local' ? 60_000 : 2 * 3600_000
+          if (date.getTime() < now.getTime() + minimum) throw new Error(dispatchMode === 'local' ? '本地定时至少提前 1 分钟' : '平台排期至少提前 2 小时')
+          if (dispatchMode === 'platform' && date.getTime() > now.getTime() + 7 * 24 * 3600_000) throw new Error('平台排期不能超过 7 天')
+          if (dispatchMode === 'local') executeAt = date.toISOString(); else publishAt = date.toISOString()
+        } else {
+          if (date.getTime() < now.getTime() + 60_000) throw new Error('定时发布时间至少提前 1 分钟')
+          publishAt = date.toISOString()
+        }
+      } else if (douyin && (dispatchMode === 'local' || (jobs.length > 1 && index > 0))) throw new Error('批量发布除首条立即发布外，其余任务必须指定排期时间')
+      const submitAt = dispatchMode === 'local' ? executeAt : submissionTimes[expandedIndex]
+      return { id: `${id}-${String(expandedIndex + 1).padStart(3, '0')}`, batchId: id, assetId: asset.id, platform, title, topics, publishAt, executeAt, submitAt, aigc: input.aigc !== false, waitForCovers: douyin && input.waitForCovers === true, status: dispatchMode === 'local' ? 'waiting_local' : 'queued' }
     })
     const batch: PublishBatch = { id, dispatchMode, status: dispatchMode === 'local' ? 'waiting_local' : 'queued', createdAt: now.toISOString(), updatedAt: now.toISOString(), jobs: items }
     this.db.createPublishBatch(batch); if (idempotencyKey) this.db.setMeta(`publish:${idempotencyKey}`, id); this.db.audit('publish.created', { id, count: items.length, dispatchMode }); if (this.wakeTimer) clearTimeout(this.wakeTimer); this.wakeTimer = undefined; void this.pump(); this.changed(); return batch
@@ -97,7 +118,7 @@ export class PublisherService {
         : retryable.map((_, index) => new Date(retryNow.getTime() + index * Math.max(0, Number(configuredCooldown) || 0)).toISOString())
       : []
     retryable.forEach((value, index) => {
-      const publishAt = batch.dispatchMode === 'platform' && value.publishAt && new Date(value.publishAt).getTime() < Date.now() + 2 * 3600_000 + 60_000 ? nextSafePlatformPublishTime() : undefined
+      const publishAt = batch.dispatchMode === 'platform' && isDouyinPublishPlatform(value.platform) && value.publishAt && new Date(value.publishAt).getTime() < Date.now() + 2 * 3600_000 + 60_000 ? nextSafePlatformPublishTime() : undefined
       this.db.updatePublishJob(value.id, batch.dispatchMode === 'local' && value.executeAt && new Date(value.executeAt) > new Date() ? 'waiting_local' : 'queued', { publishAt, submitAt: submissionTimes[index] })
     })
     this.db.updatePublishBatch(batch.id, batch.dispatchMode === 'local' ? 'waiting_local' : 'queued'); void this.pump(); this.changed()
@@ -183,7 +204,7 @@ export class PublisherService {
             }
           }
           let runnable = current
-          if (batch.dispatchMode === 'platform' && current.publishAt && new Date(current.publishAt).getTime() < Date.now() + 2 * 3600_000 + 60_000) {
+          if (isDouyinPublishPlatform(current.platform) && batch.dispatchMode === 'platform' && current.publishAt && new Date(current.publishAt).getTime() < Date.now() + 2 * 3600_000 + 60_000) {
             const publishAt = nextSafePlatformPublishTime()
             this.db.updatePublishJob(current.id, current.status, { publishAt })
             runnable = { ...current, publishAt }
@@ -215,9 +236,14 @@ export class PublisherService {
   private async runJob(job: PublishJob) {
     if (this.cancelledBatches.has(job.batchId)) return false
     const asset = this.db.asset(job.assetId)!; const payloadPath = path.join(this.tempDir, `${job.id}.json`)
-    await writeFile(payloadPath, JSON.stringify({ jobId: job.id, file: asset.file, title: job.title, topics: job.topics, publishAt: job.publishAt, aigc: job.aigc, waitForCovers: job.waitForCovers, artifactDir: this.artifactDir }))
+    const douyin = isDouyinPublishPlatform(job.platform)
+    const cover = path.join(process.env.SVD_CONFIG_DIR || '/config', 'thumbnails', `${asset.id}.jpg`)
+    const payload = douyin
+      ? { jobId: job.id, file: asset.file, title: job.title, topics: job.topics, publishAt: job.publishAt, aigc: job.aigc, waitForCovers: job.waitForCovers, artifactDir: this.artifactDir }
+      : { jobId: job.id, platform: job.platform, injectUrl: multipostPlatform(job.platform)?.injectUrl, file: asset.file, title: job.title, topics: job.topics, summary: asset.analysis?.summary || '', publishAt: job.publishAt, coverFile: existsSync(cover) ? cover : undefined, artifactDir: this.artifactDir }
+    await writeFile(payloadPath, JSON.stringify(payload))
     let succeeded = false
-    await this.execute(['publish', payloadPath], event => {
+    await this.execute(douyin ? this.douyinScript : this.multipostScript, ['publish', payloadPath], event => {
       if (this.cancelledBatches.has(job.batchId)) return
       const latest = this.db.publishBatches().find(value => value.id === job.batchId)?.jobs.find(value => value.id === job.id)
       if (latest?.status === 'cancelled') return
@@ -236,12 +262,12 @@ export class PublisherService {
       if (latest && cancellable.has(latest.status)) this.db.updatePublishJob(job.id, 'cancelled', { error: '用户取消了发布任务' })
       return false
     }
-    if (succeeded) { this.loginStatus = 'ready'; this.message = '抖音发布服务已就绪'; this.changed() }
+    if (succeeded) { this.loginStatus = 'ready'; this.message = douyin ? '抖音发布服务已就绪' : `${publishPlatformLabel(job.platform)}发布流程已结束`; this.changed() }
     return succeeded
   }
-  private execute(args: string[], onEvent: (event: Record<string, unknown>) => void, batchId?: string) {
+  private execute(script: string, args: string[], onEvent: (event: Record<string, unknown>) => void, batchId?: string) {
     return new Promise<void>(resolve => {
-      const child = spawn('node', [this.script, ...args], { env: { ...process.env, DOUYIN_CDP_URL: this.browserUrl, DOUYIN_CDP_TOKEN: this.browserToken }, windowsHide: true }); let buffer = '', terminalTimer: NodeJS.Timeout | undefined
+      const child = spawn('node', [script, ...args], { env: { ...process.env, DOUYIN_CDP_URL: this.browserUrl, DOUYIN_CDP_TOKEN: this.browserToken }, windowsHide: true }); let buffer = '', terminalTimer: NodeJS.Timeout | undefined
       if (batchId) { this.activeChild = child; this.activeBatchId = batchId }
       const finish = () => { if (terminalTimer) clearTimeout(terminalTimer); if (batchId && this.activeChild === child) { this.activeChild = undefined; this.activeBatchId = undefined } resolve() }
       const consumeEvent = (event: Record<string, unknown>) => {

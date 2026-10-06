@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -70,7 +70,7 @@ describe('工作台持久化与安全边界', () => {
 
   it('活动发布批次不能被删除', () => {
     const asset = db.assets()[0], now = new Date().toISOString()
-    db.createPublishBatch({ id: 'batch-active', dispatchMode: 'platform', status: 'queued', createdAt: now, updatedAt: now, jobs: [{ id: 'batch-active-001', batchId: 'batch-active', assetId: asset.id, title: 'Directions', topics: ['English'], aigc: true, waitForCovers: false, status: 'queued' }] })
+    db.createPublishBatch({ id: 'batch-active', dispatchMode: 'platform', status: 'queued', createdAt: now, updatedAt: now, jobs: [{ id: 'batch-active-001', batchId: 'batch-active', assetId: asset.id, title: 'Directions', topics: ['English'], platform: 'douyin', aigc: true, waitForCovers: false, status: 'queued' }] })
     expect(db.deletePublishBatch('batch-active')).toBe(false)
     db.updatePublishJob('batch-active-001', 'published'); db.updatePublishBatch('batch-active', 'completed')
     expect(db.deletePublishBatch('batch-active')).toBe(true)
@@ -78,8 +78,8 @@ describe('工作台持久化与安全边界', () => {
 
   it('抖音发布已结束历史可批量清除，运行中批次保留', () => {
     const asset = db.assets()[0], now = new Date().toISOString()
-    db.createPublishBatch({ id: 'batch-running', dispatchMode: 'local', status: 'running', createdAt: now, updatedAt: now, jobs: [{ id: 'batch-running-001', batchId: 'batch-running', assetId: asset.id, title: 'Running', topics: ['English'], aigc: true, waitForCovers: false, status: 'uploading' }] })
-    db.createPublishBatch({ id: 'batch-done', dispatchMode: 'platform', status: 'failed', createdAt: now, updatedAt: now, jobs: [{ id: 'batch-done-001', batchId: 'batch-done', assetId: asset.id, title: 'Failed', topics: ['English'], aigc: true, waitForCovers: false, status: 'failed', error: '验证码' }] })
+    db.createPublishBatch({ id: 'batch-running', dispatchMode: 'local', status: 'running', createdAt: now, updatedAt: now, jobs: [{ id: 'batch-running-001', batchId: 'batch-running', assetId: asset.id, title: 'Running', topics: ['English'], platform: 'douyin', aigc: true, waitForCovers: false, status: 'uploading' }] })
+    db.createPublishBatch({ id: 'batch-done', dispatchMode: 'platform', status: 'failed', createdAt: now, updatedAt: now, jobs: [{ id: 'batch-done-001', batchId: 'batch-done', assetId: asset.id, title: 'Failed', topics: ['English'], platform: 'douyin', aigc: true, waitForCovers: false, status: 'failed', error: '验证码' }] })
     expect(db.clearPublishHistory()).toBe(1)
     expect(db.publishBatches().some(batch => batch.id === 'batch-running')).toBe(true)
     expect(db.publishBatches().some(batch => batch.id === 'batch-done')).toBe(false)
@@ -91,7 +91,7 @@ describe('工作台持久化与安全边界', () => {
     const [kept, removed, busy] = await Promise.all([library.registerFile(keep), library.registerFile(gone), library.registerFile(busyFile)])
     const now = new Date().toISOString()
     db.createAnalysis({ id: 'analysis-busy', status: 'analyzing', assetIds: [busy.id], progress: 50, message: '分析中', processedItems: 0, totalItems: 1, logs: [], createdAt: now, updatedAt: now }, path.join(config, 'analysis-busy'))
-    db.createPublishBatch({ id: 'batch-deleted', dispatchMode: 'platform', status: 'completed', createdAt: now, updatedAt: now, jobs: [{ id: 'batch-deleted-001', batchId: 'batch-deleted', assetId: removed.id, title: 'Gone', topics: [], aigc: true, waitForCovers: false, status: 'published' }] })
+    db.createPublishBatch({ id: 'batch-deleted', dispatchMode: 'platform', status: 'completed', createdAt: now, updatedAt: now, jobs: [{ id: 'batch-deleted-001', batchId: 'batch-deleted', assetId: removed.id, title: 'Gone', topics: [], platform: 'douyin', aigc: true, waitForCovers: false, status: 'published' }] })
     await expect(library.deleteAssets([removed.id, busy.id], true)).rejects.toThrow('正在分析或发布')
     expect(db.asset(removed.id)).toBeTruthy()
     const result = await library.deleteAssets([removed.id], true)
@@ -216,8 +216,8 @@ describe('工作台持久化与安全边界', () => {
     db.createPublishBatch({
       id: 'batch-retry-schedule', dispatchMode: 'platform', status: 'failed', createdAt: now, updatedAt: now,
       jobs: [
-        { id: 'batch-retry-schedule-001', batchId: 'batch-retry-schedule', assetId: asset.id, title: 'Retry', topics: ['English'], publishAt: stalePublishAt, aigc: true, waitForCovers: false, status: 'failed', error: '排期过近' },
-        { id: 'batch-retry-schedule-002', batchId: 'batch-retry-schedule', assetId: asset.id, title: 'Continue', topics: ['English'], publishAt: new Date(Date.now() + 4 * 3600_000).toISOString(), aigc: true, waitForCovers: false, status: 'interrupted', error: '前一任务需要人工处理，批次已停止' },
+        { id: 'batch-retry-schedule-001', batchId: 'batch-retry-schedule', assetId: asset.id, title: 'Retry', topics: ['English'], publishAt: stalePublishAt, platform: 'douyin', aigc: true, waitForCovers: false, status: 'failed', error: '排期过近' },
+        { id: 'batch-retry-schedule-002', batchId: 'batch-retry-schedule', assetId: asset.id, title: 'Continue', topics: ['English'], publishAt: new Date(Date.now() + 4 * 3600_000).toISOString(), platform: 'douyin', aigc: true, waitForCovers: false, status: 'interrupted', error: '前一任务需要人工处理，批次已停止' },
       ],
     })
     const { PublisherService } = await import('../src/server/publisher')
@@ -254,7 +254,7 @@ describe('工作台持久化与安全边界', () => {
   it('启动时对账已发布历史与媒体处理状态', async () => {
     const asset = db.assets()[0], now = new Date().toISOString()
     db.setAssetState(asset.id, 'unprocessed')
-    db.createPublishBatch({ id: 'batch-reconcile', dispatchMode: 'platform', status: 'interrupted', createdAt: now, updatedAt: now, jobs: [{ id: 'batch-reconcile-001', batchId: 'batch-reconcile', assetId: asset.id, title: 'Directions', topics: ['English'], aigc: true, waitForCovers: false, status: 'published' }] })
+    db.createPublishBatch({ id: 'batch-reconcile', dispatchMode: 'platform', status: 'interrupted', createdAt: now, updatedAt: now, jobs: [{ id: 'batch-reconcile-001', batchId: 'batch-reconcile', assetId: asset.id, title: 'Directions', topics: ['English'], platform: 'douyin', aigc: true, waitForCovers: false, status: 'published' }] })
     const { AppDatabase } = await import('../src/server/db')
     const reopened = new AppDatabase()
     expect(reopened.asset(asset.id)?.processingState).toBe('processed')
@@ -271,8 +271,8 @@ describe('工作台持久化与安全边界', () => {
       createdAt: now,
       updatedAt: now,
       jobs: [
-        { id: 'batch-resume-pending-001', batchId: 'batch-resume-pending', assetId: asset.id, title: 'Done', topics: ['English'], aigc: true, waitForCovers: false, status: 'published' },
-        { id: 'batch-resume-pending-002', batchId: 'batch-resume-pending', assetId: asset.id, title: 'Pending', topics: ['English'], submitAt, aigc: true, waitForCovers: false, status: 'queued' },
+        { id: 'batch-resume-pending-001', batchId: 'batch-resume-pending', assetId: asset.id, title: 'Done', topics: ['English'], platform: 'douyin', aigc: true, waitForCovers: false, status: 'published' },
+        { id: 'batch-resume-pending-002', batchId: 'batch-resume-pending', assetId: asset.id, title: 'Pending', topics: ['English'], submitAt, platform: 'douyin', aigc: true, waitForCovers: false, status: 'queued' },
       ],
     })
     const { AppDatabase } = await import('../src/server/db')
@@ -315,5 +315,47 @@ describe('工作台持久化与安全边界', () => {
     expect(db.subscription(sub.id)?.lastError).toBeUndefined()
     expect(db.deleteSubscription(sub.id)).toBe(true)
     expect(db.notifications()).toHaveLength(0)
+  })
+
+  it('混合发布保留抖音约束，其它平台不改写排期且未确认成功时需要检查', async () => {
+    const skill = path.join(root, 'multipost-publisher-skill'), scripts = path.join(skill, 'scripts'), capture = path.join(root, 'multipost-capture')
+    mkdirSync(scripts, { recursive: true }); mkdirSync(capture, { recursive: true })
+    writeFileSync(path.join(scripts, 'douyin_publisher.mjs'), `process.stdout.write(JSON.stringify({event:'published'})+'\\n')`)
+    writeFileSync(path.join(scripts, 'multipost_publisher.mjs'), `import fs from 'node:fs'; const job=JSON.parse(fs.readFileSync(process.argv[3],'utf8')); fs.writeFileSync(process.env.SVD_CAPTURE_DIR+'/'+job.jobId+'.json', JSON.stringify(job)); process.stdout.write(JSON.stringify({event:'error', message:'MANUAL_REVIEW_REQUIRED：未确认发布成功，请在平台页面检查'})+'\\n')`)
+    process.env.SVD_SKILL_DIR = skill
+    process.env.SVD_CAPTURE_DIR = capture
+    process.env.SVD_PUBLISH_COOLDOWN_MS = '0'
+    const file = path.join(downloads, 'multipost.mp4'); writeFileSync(file, '')
+    const asset = await library.registerFile(file)
+    db.setAnalysis(asset.id, { title: '问路', englishTitle: 'Asking for Directions', category: '日常交流', keyTopics: ['directions'], summary: '练习问路。', confidence: 'high', evidenceNote: '字幕' })
+    const { PublisherService } = await import('../src/server/publisher')
+    const publisher = new PublisherService(db, () => undefined)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const soon = new Date(Date.now() + 5 * 60_000).toISOString()
+    const later = new Date(Date.now() + 3 * 3600_000).toISOString()
+    expect(() => publisher.create([{ assetId: asset.id, title: 'Directions', topics: ['English'], publishAt: soon }], 'platform', undefined, ['douyin', 'VIDEO_REDNOTE'])).toThrow(/2 小时/)
+    expect(() => publisher.create([{ assetId: asset.id, title: 'x'.repeat(31), topics: ['English'] }], 'platform', undefined, ['douyin'])).toThrow(/30/)
+    expect(() => publisher.create([{ assetId: asset.id, title: 'x'.repeat(101), topics: ['English'] }], 'platform', undefined, ['VIDEO_REDNOTE'])).toThrow(/100/)
+    expect(() => publisher.create([{ assetId: asset.id, title: 'One', topics: ['English'], publishAt: later }, { assetId: asset.id, title: 'Two', topics: ['English'], publishAt: later }], 'local', undefined, ['VIDEO_REDNOTE'])).toThrow(/本地定时仅用于抖音/)
+    const rednote = publisher.create([{ assetId: asset.id, title: 'Directions', topics: ['English'], publishAt: soon }], 'platform', undefined, ['VIDEO_REDNOTE'])
+    expect(rednote.jobs.map(job => job.platform)).toEqual(['VIDEO_REDNOTE'])
+    expect(rednote.jobs[0].publishAt).toBe(soon)
+    for (let index = 0; index < 50 && db.publishBatches().find(value => value.id === rednote.id)?.status === 'queued'; index += 1) await new Promise(resolve => setTimeout(resolve, 20))
+    for (let index = 0; index < 50 && !['needs_attention', 'failed', 'completed'].includes(db.publishBatches().find(value => value.id === rednote.id)?.status || ''); index += 1) await new Promise(resolve => setTimeout(resolve, 20))
+    const persisted = db.publishBatches().find(value => value.id === rednote.id)!
+    expect(persisted.jobs[0].status).toBe('needs_attention')
+    expect(persisted.jobs[0].publishAt).toBe(soon)
+    const captured = JSON.parse(readFileSync(path.join(capture, `${rednote.jobs[0].id}.json`), 'utf8'))
+    expect(captured).toMatchObject({ platform: 'VIDEO_REDNOTE', file: asset.file, title: 'Directions', summary: '练习问路。', injectUrl: 'https://creator.xiaohongshu.com/publish/publish?target=video' })
+    expect(captured.topics).toEqual(expect.arrayContaining(['英语启蒙', 'English']))
+    const mixed = publisher.create([
+      { assetId: asset.id, title: 'First', topics: ['English'] },
+      { assetId: asset.id, title: 'Second', topics: ['English'], publishAt: later },
+    ], 'platform', undefined, ['douyin', 'VIDEO_REDNOTE'])
+    expect(mixed.jobs.map(job => job.platform)).toEqual(['douyin', 'VIDEO_REDNOTE', 'douyin', 'VIDEO_REDNOTE'])
+    expect(mixed.jobs[0].publishAt).toBeUndefined()
+    expect(mixed.jobs[2].publishAt).toBe(later)
+    expect(mixed.jobs[3].publishAt).toBe(later)
+    delete process.env.SVD_CAPTURE_DIR
   })
 })

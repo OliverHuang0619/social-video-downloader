@@ -142,6 +142,8 @@ export interface PublishJob {
   id: string
   batchId: string
   assetId: string
+  /** `douyin` uses the built-in publisher. Other ids come from the MultiPost video catalog. */
+  platform: string
   title: string
   topics: string[]
   publishAt?: string

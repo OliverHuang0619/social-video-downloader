@@ -148,7 +148,7 @@ async function api(request: IncomingMessage, response: ServerResponse, url: URL)
   if (request.method === 'POST' && pathname === '/api/codex/login/cancel') { codex.cancelLogin(); return json(response, 200, await codex.status()) }
   if (request.method === 'POST' && pathname === '/api/codex/logout') { await codex.logout(); return json(response, 200, await codex.status()) }
   if (request.method === 'GET' && pathname === '/api/publisher/status') return json(response, 200, await publisher.status())
-  if (request.method === 'POST' && pathname === '/api/publisher/login') { publisher.login(); return json(response, 202, await publisher.status()) }
+  if (request.method === 'POST' && pathname === '/api/publisher/login') { const value = await body<{ platform?: string }>(request); publisher.login(value.platform); return json(response, 202, await publisher.status()) }
   if (request.method === 'GET' && pathname === '/api/publisher/jobs') return json(response, 200, db.publishBatches())
   const artifactMatch = request.method === 'GET' && pathname.match(/^\/api\/publisher\/artifacts\/([^/]+)$/)
   if (artifactMatch) {
@@ -158,7 +158,7 @@ async function api(request: IncomingMessage, response: ServerResponse, url: URL)
     if (relative.startsWith('..') || path.isAbsolute(relative)) return json(response, 403, { error: '不允许访问该文件' })
     const info = await stat(file); response.writeHead(200, { 'content-type': 'image/png', 'content-length': info.size, 'cache-control': 'private, no-store' }); return createReadStream(file).pipe(response)
   }
-  if (request.method === 'POST' && pathname === '/api/publisher/publish') { const value = await body<{ jobs: Parameters<PublisherService['create']>[0]; dispatchMode: 'platform' | 'local'; idempotencyKey?: string }>(request); return json(response, 202, publisher.create(value.jobs, value.dispatchMode, value.idempotencyKey)) }
+  if (request.method === 'POST' && pathname === '/api/publisher/publish') { const value = await body<{ jobs: Parameters<PublisherService['create']>[0]; dispatchMode: 'platform' | 'local'; idempotencyKey?: string; platforms?: string[] }>(request); return json(response, 202, publisher.create(value.jobs, value.dispatchMode, value.idempotencyKey, value.platforms)) }
   const publishRetry = request.method === 'POST' && pathname.match(/^\/api\/publisher\/jobs\/([^/]+)\/retry$/); if (publishRetry) { publisher.retry(publishRetry[1]); return json(response, 202, null) }
   const cancelBatch = request.method === 'POST' && pathname.match(/^\/api\/publisher\/batches\/([^/]+)\/cancel$/); if (cancelBatch) { publisher.cancelBatch(cancelBatch[1]); return json(response, 200, null) }
   if (request.method === 'DELETE' && pathname === '/api/publisher/batches') return json(response, 200, { count: await publisher.clearHistory() })

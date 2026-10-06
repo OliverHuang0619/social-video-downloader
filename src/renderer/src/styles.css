@@ -667,6 +667,10 @@ button.small { min-height: 26px; padding: 0 8px; font-size: 12px; }
 .modal fieldset { margin: 14px 0 0; padding: 0; border: 0; }
 .modal fieldset legend { padding: 0; margin-bottom: 6px; color: var(--ink-3); font-size: 12px; }
 .modal fieldset .check { margin: 10px 0; }
+.platform-picker { display: flex; flex-wrap: wrap; gap: 8px; max-height: 168px; overflow: auto; }
+.platform-picker .chip { cursor: pointer; }
+.platform-login-list { max-height: 360px; overflow: auto; margin-top: 8px; }
+.settings-section h3 { margin: 22px 0 4px; font-size: 15px; }
 .modal .check { font-size: 13.5px; }
 .modal .label-row { display: flex; justify-content: space-between; align-items: baseline; }
 .modal .label-row span { font-family: var(--font-data); font-size: 11.5px; color: var(--ink-3); }
