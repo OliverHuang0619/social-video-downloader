@@ -5,7 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import { chromium } from "playwright-core";
 import { multipostInjectors } from "./multipost/injectors.mjs";
-import { buildSyncData, publishMediaUrls, resolveMediaFulfillment, videoContentType } from "./multipost/media.mjs";
+import { buildSyncData, isPublishMediaRequest, isWeixinMediaSuiteWasm, publishMediaUrls, resolveMediaFulfillment, videoContentType } from "./multipost/media.mjs";
 import { classifyPublishOutcome, detectChallenge, detectLogin } from "./multipost/outcome.mjs";
 
 const command = process.argv[2] || "";
@@ -59,11 +59,86 @@ async function screenshot(page, artifactDir, jobId) {
 }
 
 async function pageText(page) {
-  return page.locator("body").innerText({ timeout: 8000 }).catch(() => "");
+  const parts = [];
+  for (const frame of page.frames()) {
+    const text = await frame.locator("body").innerText({ timeout: 2000 }).catch(() => "");
+    if (text) parts.push(text);
+  }
+  return parts.join("\n");
 }
 
 async function hasFileInput(page) {
   return page.locator('input[type="file"]').count().then(count => count > 0).catch(() => false);
+}
+
+async function observePage(page) {
+  if (page.isClosed()) return { url: "", body: "", hasFileInput: false };
+  return { url: page.url(), body: await pageText(page), hasFileInput: await hasFileInput(page) };
+}
+
+async function waitForSignal(page, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let state = await observePage(page);
+  while (Date.now() < deadline && !page.isClosed()) {
+    if (state.hasFileInput || detectLogin(state) || detectChallenge(state.body)) return state;
+    await page.waitForTimeout(1000);
+    state = await observePage(page);
+  }
+  return state;
+}
+
+async function waitForUploadAfterLogin(page, injectUrl, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let navigated = false;
+  while (Date.now() < deadline && !page.isClosed()) {
+    const state = await observePage(page);
+    if (state.hasFileInput && !detectLogin(state)) return true;
+    if (!detectLogin(state) && !navigated) {
+      navigated = true;
+      await page.goto(injectUrl, { waitUntil: "domcontentloaded", timeout: 90000 }).catch(() => undefined);
+      continue;
+    }
+    await page.waitForTimeout(1500);
+  }
+  return false;
+}
+
+const wasmBodies = new Map();
+
+function weixinWasmBody(requestUrl) {
+  const clean = requestUrl.split("?")[0];
+  if (!wasmBodies.has(clean)) {
+    wasmBodies.set(clean, fetch(clean).then(async response => {
+      if (!response.ok) throw new Error(`视频号编辑器组件下载失败：${response.status}`);
+      return Buffer.from(await response.arrayBuffer());
+    }));
+  }
+  return wasmBodies.get(clean);
+}
+
+async function installPublishRoutes(page, files) {
+  await page.route(url => isWeixinMediaSuiteWasm(url.href), async route => {
+    try {
+      const body = await weixinWasmBody(route.request().url());
+      await route.fulfill({ status: 200, contentType: "application/wasm", headers: { "access-control-allow-origin": "*" }, body });
+    } catch {
+      wasmBodies.delete(route.request().url().split("?")[0]);
+      await route.continue().catch(() => undefined);
+    }
+  });
+  await page.route(url => isPublishMediaRequest(url.href), async route => {
+    const match = resolveMediaFulfillment(route.request().url(), files);
+    if (!match) return route.abort();
+    return route.fulfill({ path: match.path, contentType: match.contentType });
+  });
+}
+
+function loginRequiredMessage(body, keptOpen) {
+  if (keptOpen && body.includes("登录视频号助手")) {
+    return "LOGIN_REQUIRED：视频号还没登录。登录页已留在发布浏览器里，请用微信扫码，完成后再点重试";
+  }
+  if (keptOpen) return "LOGIN_REQUIRED：请先在发布浏览器中登录该平台。登录页已保留，完成后可重试";
+  return "LOGIN_REQUIRED：请先在发布浏览器中登录该平台";
 }
 
 async function openLogin(homeUrl) {
@@ -98,49 +173,68 @@ async function publish(payloadPath) {
   const page = await context.newPage();
   page.setDefaultTimeout(15 * 60 * 1000);
   const logs = [];
+  let keepPage = false;
   page.on("console", message => logs.push(message.text()));
   try {
-    await page.route("https://svd.local/publish/**", route => {
-      const match = resolveMediaFulfillment(route.request().url(), files);
-      if (!match) return route.abort();
-      return route.fulfill({ path: match.path, contentType: match.contentType });
-    });
+    await installPublishRoutes(page, files);
     emit("launching");
     await page.goto(payload.injectUrl, { waitUntil: "domcontentloaded", timeout: 90000 });
-    const body = await pageText(page);
-    const fileInput = await hasFileInput(page);
-    const challenge = detectChallenge(body);
+    let state = await waitForSignal(page, 20000);
+    const challenge = detectChallenge(state.body);
     if (challenge) {
       const shot = await screenshot(page, payload.artifactDir, payload.jobId);
       emit("error", { message: `MANUAL_REVIEW_REQUIRED：页面提示“${challenge}”，自动发布已暂停，请在可见浏览器中人工处理`, screenshot: shot });
       return;
     }
-    if (detectLogin({ url: page.url(), body, hasFileInput: fileInput })) {
-      const shot = await screenshot(page, payload.artifactDir, payload.jobId);
-      emit("error", { message: "LOGIN_REQUIRED：请先在发布浏览器中登录该平台", screenshot: shot });
-      return;
+    if (!state.hasFileInput && !detectLogin(state)) state = await waitForSignal(page, 40000);
+    if (detectLogin(state)) {
+      emit("waiting_login", { url: state.url });
+      const ready = await waitForUploadAfterLogin(page, payload.injectUrl, 5 * 60 * 1000);
+      if (!ready) {
+        keepPage = remote && !page.isClosed();
+        const latest = page.isClosed() ? state : await observePage(page);
+        const shot = await screenshot(page, payload.artifactDir, payload.jobId);
+        emit("error", { message: loginRequiredMessage(latest.body || state.body, keepPage), screenshot: shot });
+        return;
+      }
     }
     emit("uploading");
+    const sync = buildSyncData({ ...payload, videoType: files.videoType }, urls);
+    if (payload.platform === "VIDEO_WEIXINCHANNEL") {
+      try {
+        await page.locator('input[type="file"]').first().setInputFiles(payload.file, { timeout: 20000 });
+        delete sync.data.video;
+      } catch (error) {
+        logs.push(`本地选择视频失败: ${error instanceof Error ? error.message : error}`);
+      }
+    }
     let evaluateError = "";
     try {
-      await page.evaluate(injector, buildSyncData({ ...payload, videoType: files.videoType }, urls));
+      await page.evaluate(injector, sync);
     } catch (error) {
       evaluateError = error instanceof Error ? error.message : String(error);
     }
     if (evaluateError) logs.push(`发布过程中出错: ${evaluateError}`);
     await page.waitForTimeout(1500);
+    const body = await pageText(page);
     const outcome = classifyPublishOutcome({
       url: page.url(),
-      body: await pageText(page),
+      body,
       logs,
       scheduled: Boolean(payload.publishAt),
       hasFileInput: await hasFileInput(page),
     });
     const shot = await screenshot(page, payload.artifactDir, payload.jobId);
-    if (outcome.event === "error") emit("error", { message: outcome.message, screenshot: shot });
-    else emit(outcome.event, { screenshot: shot });
+    if (outcome.event === "error") {
+      let message = outcome.message;
+      if (message.includes("LOGIN_REQUIRED")) {
+        keepPage = remote && !page.isClosed();
+        message = loginRequiredMessage(body, keepPage);
+      }
+      emit("error", { message, screenshot: shot });
+    } else emit(outcome.event, { screenshot: shot });
   } finally {
-    await page.close().catch(() => undefined);
+    if (!keepPage) await page.close().catch(() => undefined);
     await disconnect(context, remote);
   }
 }

@@ -9,7 +9,7 @@ export function detectChallenge(body = '') {
 export function detectLogin({ url = '', body = '', hasFileInput = false } = {}) {
   if (hasFileInput) return false
   const loginUrl = /\/(login|signin|sign-in|passport)(\/|$|\?)/i.test(url)
-  const loginText = /扫码登录|请先登录|登录后继续|Sign in|Log in/.test(body)
+  const loginText = /扫码登录|请先登录|登录后继续|登录视频号助手|请使用微信扫|微信扫一扫|Sign in|Log in/.test(body)
   return loginUrl || loginText
 }
 

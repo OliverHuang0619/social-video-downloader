@@ -62,7 +62,7 @@ export class AppDatabase {
     if (!publishColumns.has('submit_at')) this.sqlite.exec('ALTER TABLE publish_jobs ADD COLUMN submit_at TEXT')
     if (!publishColumns.has('platform')) this.sqlite.exec("ALTER TABLE publish_jobs ADD COLUMN platform TEXT NOT NULL DEFAULT 'douyin'")
     this.sqlite.exec("UPDATE analysis_jobs SET status='failed', error='服务重启，原分析任务已中断', updated_at=datetime('now') WHERE status IN ('queued','preparing','analyzing')")
-    this.sqlite.exec("UPDATE publish_jobs SET status='interrupted', error='服务曾在发布过程中重启，请先到对应平台确认是否已经发布' WHERE status IN ('launching','uploading','scheduling','waiting_covers','submitting')")
+    this.sqlite.exec("UPDATE publish_jobs SET status='interrupted', error='服务曾在发布过程中重启，请先到对应平台确认是否已经发布' WHERE status IN ('launching','waiting_login','uploading','scheduling','waiting_covers','submitting')")
     this.sqlite.exec("UPDATE publish_batches SET status='interrupted', updated_at=datetime('now') WHERE status='running'")
     this.sqlite.exec("UPDATE media_assets SET processing_state='processed', updated_at=datetime('now') WHERE id IN (SELECT asset_id FROM publish_jobs WHERE status IN ('published','scheduled'))")
     this.sqlite.exec("UPDATE publish_batches SET status='completed', updated_at=datetime('now') WHERE status='interrupted' AND EXISTS (SELECT 1 FROM publish_jobs WHERE batch_id=publish_batches.id) AND NOT EXISTS (SELECT 1 FROM publish_jobs WHERE batch_id=publish_batches.id AND status NOT IN ('published','scheduled'))")
@@ -118,7 +118,7 @@ export class AppDatabase {
   busyAssetIds(ids: string[]) {
     const wanted = new Set(ids), busy = new Set<string>()
     for (const row of this.sqlite.prepare("SELECT asset_ids FROM analysis_jobs WHERE status IN ('queued','preparing','analyzing')").all() as { asset_ids: string }[]) for (const id of JSON.parse(row.asset_ids) as string[]) if (wanted.has(id)) busy.add(id)
-    for (const row of this.sqlite.prepare("SELECT asset_id FROM publish_jobs WHERE status IN ('queued','waiting_local','launching','uploading','scheduling','waiting_covers','submitting')").all() as { asset_id: string }[]) if (wanted.has(row.asset_id)) busy.add(row.asset_id)
+    for (const row of this.sqlite.prepare("SELECT asset_id FROM publish_jobs WHERE status IN ('queued','waiting_local','launching','waiting_login','uploading','scheduling','waiting_covers','submitting')").all() as { asset_id: string }[]) if (wanted.has(row.asset_id)) busy.add(row.asset_id)
     for (const row of this.sqlite.prepare('SELECT payload FROM remake_jobs').all() as { payload: string }[]) {
       const job = JSON.parse(row.payload) as RemakeJob
       if (['queued', 'preparing', 'directing', 'building'].includes(job.status)) for (const id of job.assetIds) if (wanted.has(id)) busy.add(id)

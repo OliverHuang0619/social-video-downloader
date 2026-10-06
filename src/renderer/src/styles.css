@@ -207,7 +207,7 @@ label > input:not([type="checkbox"]), label > select, label > textarea { display
 }
 .pill.completed, .pill.published, .pill.scheduled, .pill.processed, .pill.ready, .pill.skipped { background: var(--ok-soft); color: var(--ok); }
 .pill.failed, .pill.needs_attention, .pill.interrupted, .pill.needs_login { background: var(--bad-soft); color: var(--bad); }
-.pill.analyzing, .pill.uploading, .pill.running, .pill.downloading, .pill.preparing, .pill.launching, .pill.scheduling, .pill.submitting, .pill.waiting_covers { background: var(--run-soft); color: var(--run); }
+.pill.analyzing, .pill.uploading, .pill.running, .pill.downloading, .pill.preparing, .pill.launching, .pill.waiting_login, .pill.scheduling, .pill.submitting, .pill.waiting_covers { background: var(--run-soft); color: var(--run); }
 .pill.partial { background: var(--warn-soft); color: var(--warn); }
 
 .chip {

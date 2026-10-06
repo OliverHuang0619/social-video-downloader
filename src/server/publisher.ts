@@ -10,7 +10,7 @@ import type { AppDatabase } from './db'
 
 type PublishInput = { assetId: string; title: string; topics: string[]; publishAt?: string; aigc?: boolean; waitForCovers?: boolean }
 const terminal = new Set(['published', 'scheduled', 'failed', 'needs_login', 'needs_attention', 'interrupted', 'cancelled'])
-const cancellable = new Set(['queued', 'waiting_local', 'launching', 'uploading', 'scheduling', 'waiting_covers', 'submitting'])
+const cancellable = new Set(['queued', 'waiting_local', 'launching', 'waiting_login', 'uploading', 'scheduling', 'waiting_covers', 'submitting'])
 
 function loadBrowserToken(mode: BrowserStatus['mode']) {
   if (mode !== 'host') return ''
@@ -248,10 +248,11 @@ export class PublisherService {
       const latest = this.db.publishBatches().find(value => value.id === job.batchId)?.jobs.find(value => value.id === job.id)
       if (latest?.status === 'cancelled') return
       const name = String(event.event)
-      if (['launching', 'uploading', 'scheduling', 'waiting_covers', 'submitting', 'published', 'scheduled'].includes(name)) {
+      if (['launching', 'waiting_login', 'uploading', 'scheduling', 'waiting_covers', 'submitting', 'published', 'scheduled'].includes(name)) {
         this.db.updatePublishJob(job.id, name as PublishJob['status'], { screenshot: event.screenshot ? String(event.screenshot) : undefined })
         succeeded = name === 'published' || name === 'scheduled'
         if (succeeded) this.db.setAssetState(job.assetId, 'processed')
+        if (name === 'waiting_login') { this.loginStatus = 'needs_login'; this.message = '请在发布浏览器中扫码登录，完成后会继续发布' }
       }
       if (name === 'error') { const message = String(event.message || '发布失败'); const status = message.includes('LOGIN_REQUIRED') ? 'needs_login' : message.includes('MANUAL_REVIEW_REQUIRED') ? 'needs_attention' : 'failed'; this.db.updatePublishJob(job.id, status, { error: message, screenshot: event.screenshot ? String(event.screenshot) : undefined }); this.loginStatus = status === 'needs_login' ? 'needs_login' : status === 'needs_attention' ? 'needs_attention' : this.loginStatus; this.message = message }
       this.changed()

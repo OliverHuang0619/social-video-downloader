@@ -9021,10 +9021,17 @@ export async function VideoWeiXinChannel(data) {
         await new Promise((resolve) => setTimeout(resolve, 5000));
         // 处理标题输入（找不到不报错，避免中断后续字段填充）
         const titleInput = (await waitForElementOptional('input[placeholder="填写短标题有机会获得更多流量"], input[placeholder="概括视频主要内容，字数建议6-16个字符"]'));
+        const titleChars = [...String(title || "").trim()];
+        const titleCut = titleChars.slice(0, 16).join("");
+        const titleSpace = titleCut.lastIndexOf(" ");
+        const shortTitle = titleChars.length <= 16 ? titleChars.join("") : titleSpace >= 8 ? titleCut.slice(0, titleSpace).trim() : titleCut.trim();
         if (titleInput) {
-            titleInput.value = title || "";
+            const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+            if (valueSetter) valueSetter.call(titleInput, shortTitle);
+            else titleInput.value = shortTitle;
             titleInput.dispatchEvent(new Event("input", { bubbles: true }));
-            console.log("标题已填写:", title);
+            titleInput.dispatchEvent(new Event("change", { bubbles: true }));
+            console.log("标题已填写:", shortTitle);
         }
         else {
             console.error("未找到视频号标题输入框");
@@ -9104,7 +9111,12 @@ export async function VideoWeiXinChannel(data) {
             await uploadCoverHorizontal(horizontalCover, root);
         }
         if (data.isAutoPublish === true) {
-            await new Promise((resolve) => setTimeout(resolve, 5000));
+            const publishReadyDeadline = Date.now() + 90000;
+            while (Date.now() < publishReadyDeadline) {
+                const visible = `${document.body?.innerText || ""}\n${root.textContent || ""}`;
+                if (!visible.includes("生成中") && !visible.includes("标题超过")) break;
+                await new Promise((resolve) => setTimeout(resolve, 2000));
+            }
             // 处理发布按钮 - 支持shadow DOM查询
             const buttons = root.querySelectorAll("button");
             const publishButton = Array.from(buttons).find((b) => b.textContent?.trim() === "发表");

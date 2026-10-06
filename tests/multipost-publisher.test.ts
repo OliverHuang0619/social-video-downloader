@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { MULTIPOST_PLATFORMS } from '../src/shared/multipost-platforms'
 import { multipostInjectors } from '../skills/english-video-catalog/scripts/multipost/injectors.mjs'
-import { buildSyncData, publishMediaUrls, resolveMediaFulfillment } from '../skills/english-video-catalog/scripts/multipost/media.mjs'
+import { buildSyncData, clampPublishTitle, isPublishMediaRequest, isWeixinMediaSuiteWasm, publishMediaUrls, resolveMediaFulfillment } from '../skills/english-video-catalog/scripts/multipost/media.mjs'
 import { classifyPublishOutcome } from '../skills/english-video-catalog/scripts/multipost/outcome.mjs'
 
 describe('MultiPost 视频平台', () => {
@@ -46,6 +46,12 @@ describe('MultiPost 视频平台', () => {
     expect(classifyPublishOutcome({ url: 'https://example.com/upload', body: '发布成功', logs: [], hasFileInput: true }).event).toBe('published')
     expect(classifyPublishOutcome({ url: 'https://example.com/upload', body: '定时发布成功', logs: [], scheduled: true, hasFileInput: true }).event).toBe('scheduled')
     expect(classifyPublishOutcome({ url: 'https://example.com/login', body: '扫码登录', hasFileInput: false }).message).toContain('LOGIN_REQUIRED')
+    expect(classifyPublishOutcome({
+      url: 'https://channels.weixin.qq.com/',
+      body: '登录视频号助手\n一站式服务，让创作更简单。',
+      logs: ['WeiXinVideo 发布过程中出错: Element with selector "input[type=file]" not found within 10000ms'],
+      hasFileInput: false,
+    }).message).toContain('LOGIN_REQUIRED')
   })
 
   it('发布载荷把摘要、话题和定时传给注入函数', () => {
@@ -55,5 +61,23 @@ describe('MultiPost 视频平台', () => {
     expect(sync.data).toMatchObject({ title: 'Directions', content: '练习问路。', tags: ['英语启蒙', 'English'], scheduledPublishTime: Date.parse('2026-10-06T12:00:00.000Z') })
     expect(sync.data.video).toEqual({ name: 'lesson.mp4', url: urls.videoUrl, type: 'video/mp4' })
     expect(sync.data.cover?.url).toBe(urls.coverUrl)
+  })
+
+  it('视频号短标题截到 16 字，并尽量停在单词边界', () => {
+    expect(clampPublishTitle('Talking About Rainy Weather', 16)).toBe('Talking About')
+    expect(clampPublishTitle('下雨天怎么说', 16)).toBe('下雨天怎么说')
+    expect(clampPublishTitle('一二三四五六七八九十一二三四五六七八九十', 16)).toBe('一二三四五六七八九十一二三四五六')
+    const urls = publishMediaUrls('job-wx')
+    const sync = buildSyncData({ platform: 'VIDEO_WEIXINCHANNEL', file: '/downloads/lesson.mp4', title: 'Talking About Rainy Weather', summary: '练习下雨天。', topics: [] }, urls)
+    expect(sync.data.title).toBe('Talking About')
+  })
+
+  it('只拦截本地发布文件和视频号编辑器 wasm', () => {
+    const urls = publishMediaUrls('job-1')
+    expect(isPublishMediaRequest(urls.videoUrl)).toBe(true)
+    expect(isPublishMediaRequest('https://channels.weixin.qq.com/platform/post/create')).toBe(false)
+    const wasm = 'https://aladin.wxqcloud.qq.com/aladin/ffmepeg/rhino-media-suite/1.5.18/rhino_video.wasm?_pageUrl=https%3A%2F%2Fchannels.weixin.qq.com%2Fmicro%2Fcontent%2Fpost%2Fcreate'
+    expect(isWeixinMediaSuiteWasm(wasm)).toBe(true)
+    expect(isWeixinMediaSuiteWasm('https://aladin.wxqcloud.qq.com/aladin/other.js')).toBe(false)
   })
 })
