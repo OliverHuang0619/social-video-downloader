@@ -21,6 +21,7 @@ import { RemakeService } from './remake'
 import { HypitConfigStore } from './hypit-config'
 import { HypitCliService } from './hypit-cli'
 import { SubscriptionService } from './subscriptions'
+import { createLocalFileActions } from './local-files'
 
 type ServerEvent =
   | { type: 'tools'; event: ToolUpdateEvent }
@@ -40,7 +41,7 @@ const hypitConfig = new HypitConfigStore()
 const hypitCli = new HypitCliService(hypitConfig)
 const remake = new RemakeService(db, library, codex, hypitConfig, () => changed('remake'))
 const subscriptions = new SubscriptionService(db, media, queue, config, () => changed('subscriptions'))
-const youtubeCookies = new YoutubeCookieService()
+const youtubeCookies = new YoutubeCookieService(), localFiles = createLocalFileActions()
 const port = Number(process.env.PORT || 3000), host = process.env.HOST || '0.0.0.0'
 const clientDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../client')
 const browserProxy = httpProxy.createProxyServer({ target: process.env.SVD_BROWSER_VNC || 'http://browser:6080', ws: true })
@@ -50,6 +51,10 @@ function json(response: ServerResponse, status: number, value: unknown) { respon
 async function body<T>(request: IncomingMessage): Promise<T> { const chunks: Buffer[] = []; let size = 0; for await (const chunk of request) { size += chunk.length; if (size > 2 * 1024 * 1024) throw Object.assign(new Error('请求内容过大'), { statusCode: 413 }); chunks.push(chunk) } return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as T }
 const mime: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.ico': 'image/x-icon' }
 async function staticFile(requestPath: string, response: ServerResponse) { const decoded = decodeURIComponent(requestPath), candidate = path.resolve(clientDir, `.${decoded}`); let target = candidate.startsWith(`${clientDir}${path.sep}`) ? candidate : path.join(clientDir, 'index.html'); try { if (!(await stat(target)).isFile()) target = path.join(clientDir, 'index.html') } catch { target = path.join(clientDir, 'index.html') } response.writeHead(200, { 'content-type': mime[path.extname(target)] || 'application/octet-stream' }); createReadStream(target).pipe(response) }
+async function libraryFiles(ids: unknown) {
+  const unique = [...new Set((Array.isArray(ids) ? ids : []).map(value => String(value)))].filter(Boolean)
+  return Promise.all(unique.map(id => library.resolvedFile(id)))
+}
 async function downloadFile(id: string, response: ServerResponse) { const job = queue.get(id); if (!job?.outputPath || !['completed', 'skipped'].includes(job.status)) return json(response, 404, { error: '下载文件不存在' }); const [root, file] = await Promise.all([realpath(config.get().outputRoot), realpath(job.outputPath)]); const relative = path.relative(root, file); if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return json(response, 403, { error: '不允许访问该文件' }); const info = await stat(file), encodedName = encodeURIComponent(path.basename(file)); response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': info.size, 'content-disposition': `attachment; filename*=UTF-8''${encodedName}`, 'cache-control': 'private, no-store' }); createReadStream(file).pipe(response) }
 
 async function api(request: IncomingMessage, response: ServerResponse, url: URL) {
@@ -80,6 +85,9 @@ async function api(request: IncomingMessage, response: ServerResponse, url: URL)
   if (request.method === 'POST' && pathname === '/api/downloads/cancel') { queue.cancel((await body<{ id?: string }>(request)).id); return json(response, 200, null) }
   if (request.method === 'POST' && pathname === '/api/downloads/retry') { const value = await body<{ id?: string }>(request); if (value.id) { queue.retry(String(value.id)); return json(response, 200, { count: 1 }) } return json(response, 200, { count: queue.retryFailed() }) }
   if (request.method === 'GET' && pathname === '/api/library') return json(response, 200, db.assets())
+  if (request.method === 'GET' && pathname === '/api/library/local-actions') return json(response, 200, await localFiles.capabilities())
+  if (request.method === 'POST' && pathname === '/api/library/reveal') { const files = await libraryFiles((await body<{ ids?: string[] }>(request)).ids); await localFiles.reveal(files); db.audit('library.reveal', { count: files.length }); return json(response, 200, { count: files.length }) }
+  if (request.method === 'POST' && pathname === '/api/library/airdrop') { const files = await libraryFiles((await body<{ ids?: string[] }>(request)).ids); await localFiles.airdrop(files); db.audit('library.airdrop', { count: files.length }); return json(response, 202, { count: files.length }) }
   if (request.method === 'POST' && pathname === '/api/library/import') return json(response, 200, await library.importDirectory(String((await body<{ directory: string }>(request)).directory || '')))
   if (request.method === 'POST' && pathname === '/api/library/delete') { const value = await body<{ ids: string[]; deleteFiles?: boolean }>(request); const result = await library.deleteAssets(Array.isArray(value.ids) ? value.ids : [], Boolean(value.deleteFiles)); changed('library'); return json(response, 200, result) }
   const stateMatch = request.method === 'POST' && pathname.match(/^\/api\/library\/([^/]+)\/state$/)

@@ -1,6 +1,6 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type SyntheticEvent } from 'react'
 import { createPortal } from 'react-dom'
-import type { AnalysisJob, BrowserStatus, CodexConnectionPublic, CodexProviderPublic, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, CreatorSubscription, DownloadJob, DownloadOptions, HypitStatus, MediaAsset, MediaFileHash, MediaFileMetadata, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, QuickTimeQuality, RemakeJob, SubscriptionNotification, SubscriptionSchedule, ToolStatus } from '../../shared/types'
+import type { AnalysisJob, BrowserStatus, CodexConnectionPublic, CodexProviderPublic, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, CreatorSubscription, DownloadJob, DownloadOptions, HypitStatus, LocalFileActionsStatus, MediaAsset, MediaFileHash, MediaFileMetadata, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, QuickTimeQuality, RemakeJob, SubscriptionNotification, SubscriptionSchedule, ToolStatus } from '../../shared/types'
 import { automaticPlatformPublishTimes, filterMediaAssets, isRemakeMediaPath, mediaAssetDirectory, normalizePublishTopics, type LibraryStateFilter } from '../../shared/core'
 import { isCodexProviderModeSelectable, shouldShowCodexProvidersManager } from '../../shared/codex-connection-ui'
 import { DEFAULT_HYPIT_REMAKE_DIRECTION } from '../../shared/remake-direction'
@@ -431,7 +431,7 @@ const FirstFrame = memo(function FirstFrame({ asset }: { asset: MediaAsset }) {
 
 const SearchIcon = () => <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
 
-const AssetCard = memo(function AssetCard({ asset, selected, remade, toggle, play, mark, publish }: { asset: MediaAsset; selected: boolean; remade: boolean; toggle: (id: string) => void; play: (asset: MediaAsset) => void; mark: (asset: MediaAsset) => void; publish: (asset: MediaAsset) => void }) {
+const AssetCard = memo(function AssetCard({ asset, selected, remade, toggle, play, mark, publish, reveal, share }: { asset: MediaAsset; selected: boolean; remade: boolean; toggle: (id: string) => void; play: (asset: MediaAsset) => void; mark: (asset: MediaAsset) => void; publish: (asset: MediaAsset) => void; reveal?: (asset: MediaAsset) => void; share?: (asset: MediaAsset) => void }) {
   const analysis = asset.analysis
   const cardRef = useRef<HTMLElement>(null), [metadata, setMetadata] = useState<MediaFileMetadata | null>()
   useEffect(() => {
@@ -462,13 +462,13 @@ const AssetCard = memo(function AssetCard({ asset, selected, remade, toggle, pla
     </div>
     <div className="card-actions">
       <button className="ghost" onClick={() => mark(asset)}>{asset.processingState === 'processed' ? '标为未处理' : '标为已处理'}</button>
-      <div className="row"><a className="button ghost" href={api.library.fileUrl(asset.id)}>下载</a><button disabled={!analysis} title={analysis ? undefined : '需要先完成分析'} onClick={() => publish(asset)}>发布</button></div>
+      <div className="row">{reveal ? <button className="ghost" title="打开文件所在目录" onClick={() => reveal(asset)}>打开目录</button> : null}{share ? <button className="ghost" title="通过 AirDrop 分享这个视频" onClick={() => share(asset)}>AirDrop</button> : null}<a className="button ghost" href={api.library.fileUrl(asset.id)}>下载</a><button disabled={!analysis} title={analysis ? undefined : '需要先完成分析'} onClick={() => publish(asset)}>发布</button></div>
     </div>
   </article>
 })
 
 function LibraryPage({ assets, remakes, reload, openTasks }: { assets: MediaAsset[]; remakes: RemakeJob[]; reload: () => void; openTasks: (taskTab: TaskTab) => void }) {
-  const [selected, setSelected] = useState<Set<string>>(new Set()), [queryInput, setQueryInput] = useState(''), [state, setState] = useState<LibraryViewFilter>('unprocessed'), [category, setCategory] = useState('all'), [directory, setDirectory] = useState(() => storedValue(LIBRARY_DIRECTORY_STORAGE_KEY, 'all')), [playing, setPlaying] = useState<MediaAsset>(), [publishing, setPublishing] = useState<MediaAsset[]>(), [remaking, setRemaking] = useState<MediaAsset[]>(), [deleting, setDeleting] = useState<MediaAsset[]>(), [importOpen, setImportOpen] = useState(false), [importPath, setImportPath] = useState('/downloads'), [importing, setImporting] = useState(false), [message, setMessage] = useState('')
+  const [selected, setSelected] = useState<Set<string>>(new Set()), [queryInput, setQueryInput] = useState(''), [state, setState] = useState<LibraryViewFilter>('unprocessed'), [category, setCategory] = useState('all'), [directory, setDirectory] = useState(() => storedValue(LIBRARY_DIRECTORY_STORAGE_KEY, 'all')), [playing, setPlaying] = useState<MediaAsset>(), [publishing, setPublishing] = useState<MediaAsset[]>(), [remaking, setRemaking] = useState<MediaAsset[]>(), [deleting, setDeleting] = useState<MediaAsset[]>(), [importOpen, setImportOpen] = useState(false), [importPath, setImportPath] = useState('/downloads'), [importing, setImporting] = useState(false), [message, setMessage] = useState(''), [localActions, setLocalActions] = useState<LocalFileActionsStatus>({ reveal: false, airdrop: false })
   const query = useDeferredValue(queryInput.trim())
   const categories = useMemo(() => [...new Set(assets.map(asset => asset.analysis?.category).filter(Boolean) as string[])].sort(), [assets])
   const sourceAssets = useMemo(() => assets.filter(asset => !isRemakeMediaPath(asset.file)), [assets])
@@ -502,6 +502,10 @@ function LibraryPage({ assets, remakes, reload, openTasks }: { assets: MediaAsse
   const play = useCallback((asset: MediaAsset) => setPlaying(asset), [])
   const publishOne = useCallback((asset: MediaAsset) => setPublishing([asset]), [])
   const mark = useCallback(async (asset: MediaAsset) => { const next = asset.processingState === 'processed' ? 'unprocessed' : 'processed'; try { await api.library.state(asset.id, next); toast(next === 'processed' ? '已标为已处理' : '已标为未处理'); reload() } catch (error) { toast(errorText(error), 'bad') } }, [reload])
+  const revealOne = useCallback(async (asset: MediaAsset) => { try { await api.library.reveal([asset.id]); toast(localActions.airdrop ? '已在访达中显示该文件' : '已打开所在目录') } catch (error) { toast(errorText(error), 'bad') } }, [localActions.airdrop])
+  const share = useCallback(async (items: MediaAsset[]) => { try { await api.library.airdrop(items.map(asset => asset.id)); toast(items.length > 1 ? `已打开 AirDrop，可分享 ${items.length} 个文件` : '已打开 AirDrop') } catch (error) { toast(errorText(error), 'bad') } }, [])
+  const shareOne = useCallback((asset: MediaAsset) => { void share([asset]) }, [share])
+  useEffect(() => { void api.library.localActions().then(setLocalActions).catch(() => setLocalActions({ reveal: false, airdrop: false })) }, [])
   const analyze = async (force = false) => { if (!chosen.length) return; if (force && !window.confirm('将重新分析所选视频并覆盖已有分析结果，是否继续？')) return; try { await api.analysis.start(chosen.map(asset => asset.id), force); toast(`已为 ${chosen.length} 个视频创建分析任务`); openTasks('analysis') } catch (error) { setMessage(errorText(error)) } }
   const runImport = async () => { setImporting(true); setMessage(''); try { const result = await api.library.import(importPath); toast(`已导入 ${result.count} 个视频`); reload() } catch (error) { setMessage(errorText(error)) } finally { setImporting(false) } }
   const allVisibleSelected = visible.length > 0 && visible.every(asset => selected.has(asset.id))
@@ -530,6 +534,7 @@ function LibraryPage({ assets, remakes, reload, openTasks }: { assets: MediaAsse
         <button className="ghost" disabled={!visible.length} onClick={() => setSelected(allVisibleSelected ? new Set() : new Set(visible.map(asset => asset.id)))}>{allVisibleSelected ? '取消全选' : '全选当前结果'}</button>
         {selected.size ? <button className="ghost" onClick={() => setSelected(new Set())}>清空选择</button> : null}
         <span className="divider" />
+        {localActions.airdrop ? <button disabled={!chosen.length} title="通过 AirDrop 分享所选视频" onClick={() => void share(chosen)}>AirDrop{chosen.length > 1 ? ` (${chosen.length})` : ''}</button> : null}
         <button className="danger-text" disabled={!chosen.length} onClick={() => setDeleting(chosen)}>删除</button>
         <button disabled={!chosen.length} onClick={() => void analyze()}>分析</button>
         <button disabled={!chosen.some(asset => asset.analysis)} onClick={() => void analyze(true)}>重新分析</button>
@@ -538,7 +543,7 @@ function LibraryPage({ assets, remakes, reload, openTasks }: { assets: MediaAsse
       </div>
     </section>
     {message && !importOpen ? <p className="error">{message}</p> : null}
-    {visible.length ? <main className="asset-grid">{visible.map(asset => <AssetCard key={asset.id} asset={asset} selected={selected.has(asset.id)} remade={remadeAssets.ids.has(asset.id) || remadeAssets.files.has(asset.file)} toggle={toggle} play={play} mark={mark} publish={publishOne} />)}</main>
+    {visible.length ? <main className="asset-grid">{visible.map(asset => <AssetCard key={asset.id} asset={asset} selected={selected.has(asset.id)} remade={remadeAssets.ids.has(asset.id) || remadeAssets.files.has(asset.file)} toggle={toggle} play={play} mark={mark} publish={publishOne} reveal={localActions.reveal ? revealOne : undefined} share={localActions.airdrop ? shareOne : undefined} />)}</main>
       : <section className="panel"><div className="empty">{assets.length ? <><strong>没有符合条件的视频</strong>试试切换状态、分类或目录，或清空搜索词</> : <><strong>媒体库是空的</strong>完成下载后视频会自动出现，也可以点击「导入目录」登记服务器上的文件</>}</div></section>}
     {playing ? <div className="modal-bg" role="dialog" aria-modal="true" aria-label="视频播放" onMouseDown={() => setPlaying(undefined)}><div className="modal player" onMouseDown={event => event.stopPropagation()}><button className="player-close" aria-label="关闭播放" title="关闭 (Esc)" onClick={() => setPlaying(undefined)}>×</button><h2>{playing.analysis?.title || playing.filename}</h2><video controls autoPlay src={api.library.mediaUrl(playing.id)} /><p className="filename">{playing.filename}</p></div></div> : null}
     {publishing ? <PublishDialog assets={publishing} close={() => setPublishing(undefined)} done={() => { setPublishing(undefined); openTasks('publisher') }} /> : null}

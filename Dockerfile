@@ -17,7 +17,8 @@ ENV NODE_ENV=production \
     SVD_SKILL_DIR=/app/skills/english-video-catalog \
     SVD_HYPIT_SKILL_FILE=/usr/local/lib/node_modules/@hypit/hypit/skills/hypit/SKILL.md \
     SVD_BROWSER_CDP=http://browser:9222 \
-    SVD_BROWSER_VNC=http://browser:6080
+    SVD_BROWSER_VNC=http://browser:6080 \
+    SVD_RUNTIME=docker
 RUN apt-get -o Acquire::Retries=3 update \
     && apt-get install -y --no-install-recommends ffmpeg python3 python3-venv ca-certificates tini gosu \
     && python3 -m venv /opt/media-tools \

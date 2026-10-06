@@ -40,6 +40,13 @@ export class LibraryService {
     }
     await walk(root); this.db.audit('library.import', { directory: root, count }); return { count }
   }
+  async resolvedFile(id: string) {
+    const asset = this.db.asset(id)
+    if (!asset) throw Object.assign(new Error('视频不存在'), { statusCode: 404 })
+    const file = await this.allowed(asset.file)
+    if (!file) throw Object.assign(new Error('不允许访问该文件'), { statusCode: 403 })
+    return file
+  }
   async registerFile(file: string, values: Partial<MediaAsset> = {}) {
     const resolved = await this.allowed(file)
     if (!resolved || !(await stat(resolved)).isFile() || !VIDEO_EXTENSIONS.has(path.extname(resolved).toLowerCase())) throw new Error('媒体文件不在允许范围内')

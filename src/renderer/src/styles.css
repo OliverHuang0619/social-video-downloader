@@ -631,9 +631,10 @@ button.small { min-height: 26px; padding: 0 8px; font-size: 12px; }
 }
 .copy-row button:hover:not(:disabled) { background: var(--inset); color: var(--ink); }
 
-.card-actions { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 8px 10px 8px 14px; border-top: 1px solid var(--line); }
+.card-actions { display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap; padding: 8px 10px 8px 14px; border-top: 1px solid var(--line); }
 .card-actions button, .card-actions .button { min-height: 30px; padding: 0 10px; font-size: 12.5px; }
 .card-actions .ghost { padding: 0 8px; }
+.card-actions .row { flex-wrap: wrap; justify-content: flex-end; }
 
 /* --- Modals ----------------------------------------------------------- */
 

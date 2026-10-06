@@ -104,6 +104,7 @@ export interface MediaAsset {
 
 export interface MediaFileHash { algorithm: 'sha256'; hash: string; size: number; modifiedAt: string }
 export interface MediaFileMetadata { size: number; duration?: number; modifiedAt: string }
+export interface LocalFileActionsStatus { reveal: boolean; airdrop: boolean }
 
 export interface AnalysisJob {
   id: string

@@ -14,6 +14,9 @@ services:
       SVD_BROWSER_MODE: "${SVD_BROWSER_MODE:-container}"
       SVD_BROWSER_CDP: "${SVD_BROWSER_CDP:-http://browser:9222}"
       SVD_BROWSER_TOKEN_FILE: /config/local-browser.token
+      SVD_RUNTIME: docker
+      SVD_HOST_FILE_ACTIONS: "${SVD_HOST_FILE_ACTIONS:-http://host.docker.internal:9333}"
+      SVD_HOST_FILE_ACTIONS_TOKEN_FILE: /config/local-file-actions.token
       SVD_CODEX_MODEL: "${SVD_CODEX_MODEL:-gpt-5.6-sol}"
       SVD_CODEX_REASONING_EFFORT: "${SVD_CODEX_REASONING_EFFORT:-medium}"
       TZ: "${TZ:-Asia/Shanghai}"

@@ -27,6 +27,7 @@ Social Video 工作台部署脚本
   LOCAL_BROWSER_BIN      本地 Chrome/Chromium 可执行文件路径
   LOCAL_BROWSER_CDP_PORT 本地 Chrome 调试端口，默认 9222
   LOCAL_BROWSER_PROXY_PORT 容器连接助手端口，默认 9223
+  LOCAL_FILE_ACTIONS_PORT 本地文件助手端口，默认 9333
 EOF
 }
 
@@ -124,6 +125,7 @@ show_result() {
 deploy() {
   require_tools
   prepare_storage
+  refresh_local_files
   log '构建并启动服务'
   compose up -d --build --remove-orphans app browser
   wait_for_services browser app
@@ -133,12 +135,21 @@ deploy() {
 redeploy() {
   require_tools
   prepare_storage
+  refresh_local_files
   log '拉取基础镜像并无缓存重建'
   compose build --pull --no-cache app browser
   log '强制重新创建容器'
   compose up -d --force-recreate --remove-orphans app browser
   wait_for_services browser app
   show_result
+}
+
+refresh_local_files() {
+  if [[ "$(uname -s)" != "Darwin" && -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
+    return
+  fi
+  log '启动本地文件助手'
+  "$ROOT_DIR/local-files.sh" restart || printf '媒体库将不提供打开目录或 AirDrop。\n' >&2
 }
 
 configure_local_browser() {
@@ -151,6 +162,7 @@ configure_local_browser() {
 deploy_local() {
   require_tools
   prepare_storage
+  refresh_local_files
   configure_local_browser
   log '使用本地浏览器构建并启动 App'
   compose up -d --build --no-deps --remove-orphans app
@@ -161,6 +173,7 @@ deploy_local() {
 redeploy_local() {
   require_tools
   prepare_storage
+  refresh_local_files
   configure_local_browser
   log '使用本地浏览器无缓存重建 App'
   compose build --pull --no-cache app
@@ -174,7 +187,7 @@ case "${1:-}" in
   redeploy) redeploy ;;
   deploy-local) deploy_local ;;
   redeploy-local) redeploy_local ;;
-  status) require_tools; compose ps; "$ROOT_DIR/local-browser.sh" status || true ;;
+  status) require_tools; compose ps; "$ROOT_DIR/local-browser.sh" status || true; "$ROOT_DIR/local-files.sh" status || true ;;
   logs) require_tools; compose logs -f --tail=200 ;;
   -h|--help|help) usage ;;
   *) usage; exit 2 ;;
