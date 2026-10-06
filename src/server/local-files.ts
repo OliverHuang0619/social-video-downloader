@@ -1,6 +1,6 @@
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
-import { realpath } from 'node:fs/promises'
+import { mkdir, realpath, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { LocalFileActionsStatus } from '../shared/types'
@@ -10,8 +10,32 @@ export type HostFileRoot = 'downloads' | 'imports'
 export type HostFileRef = { root: HostFileRoot; relative: string }
 export type LocalFileRoots = Record<HostFileRoot, string>
 
-export function airdropScriptPath() {
-  return fileURLToPath(new URL('../../scripts/airdrop-share.applescript', import.meta.url))
+export function airdropSourcePath() {
+  return fileURLToPath(new URL('../../scripts/airdrop-share.swift', import.meta.url))
+}
+export function airdropBinaryPath() {
+  return fileURLToPath(new URL('../../config/airdrop-share', import.meta.url))
+}
+let airdropBuild: Promise<string> | undefined
+export function ensureAirdropBinary() {
+  if (!airdropBuild) {
+    airdropBuild = buildAirdropBinary().catch(error => { airdropBuild = undefined; throw error })
+  }
+  return airdropBuild
+}
+async function buildAirdropBinary() {
+  const source = airdropSourcePath()
+  const binary = airdropBinaryPath()
+  const [sourceInfo, binaryInfo] = await Promise.all([stat(source), stat(binary).catch(() => undefined)])
+  if (binaryInfo && binaryInfo.mtimeMs >= sourceInfo.mtimeMs) return binary
+  await mkdir(path.dirname(binary), { recursive: true })
+  await new Promise<void>((resolve, reject) => {
+    execFile('swiftc', ['-O', '-o', binary, source], { timeout: 120_000 }, (error, _stdout, stderr) => {
+      if (error) reject(Object.assign(new Error(String(stderr || error.message).trim() || '无法编译 AirDrop 助手。请安装 Xcode 命令行工具。'), { statusCode: 500 }))
+      else resolve()
+    })
+  })
+  return binary
 }
 
 export async function hostFileRef(file: string, roots: LocalFileRoots): Promise<HostFileRef> {
@@ -33,7 +57,7 @@ export interface LocalFileRunner {
   airdrop(files: string[]): Promise<void>
 }
 
-export function createNativeRunner(platform: NodeJS.Platform, script: string, launch: (command: string, args: string[], detach: boolean) => Promise<void> = launchCommand): LocalFileRunner {
+export function createNativeRunner(platform: NodeJS.Platform, launch: (command: string, args: string[], detach: boolean) => Promise<void> = launchCommand, resolveAirdrop: () => Promise<string> = ensureAirdropBinary): LocalFileRunner {
   return {
     async reveal(files) {
       if (platform === 'darwin') return launch('open', ['-R', ...files], false)
@@ -45,7 +69,7 @@ export function createNativeRunner(platform: NodeJS.Platform, script: string, la
     },
     async airdrop(files) {
       if (platform !== 'darwin') throw Object.assign(new Error('AirDrop 仅在 Mac 上可用'), { statusCode: 409 })
-      await launch('osascript', [script, ...files], true)
+      await launch(await resolveAirdrop(), files, true)
     },
   }
 }
@@ -152,5 +176,5 @@ export function createLocalFileActions() {
     return new LocalFileActions({ mode: 'host', platform: 'linux', roots, host: endpoint && token ? { endpoint, token, fetch } : undefined })
   }
   const platform = process.platform
-  return new LocalFileActions({ mode: 'native', platform, roots, runner: createNativeRunner(platform, airdropScriptPath()) })
+  return new LocalFileActions({ mode: 'native', platform, roots, runner: createNativeRunner(platform) })
 }

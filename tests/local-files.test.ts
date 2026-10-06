@@ -37,14 +37,14 @@ describe('本地文件操作', () => {
 
   it('Mac 本机进程用访达显示文件，并把多个文件交给 AirDrop', async () => {
     const calls: Array<{ command: string; args: string[]; detach: boolean }> = []
-    const runner = createNativeRunner('darwin', '/scripts/airdrop-share.applescript', async (command, args, detach) => { calls.push({ command, args, detach }) })
+    const runner = createNativeRunner('darwin', async (command, args, detach) => { calls.push({ command, args, detach }) }, async () => '/usr/local/bin/airdrop-share')
     const actions = new LocalFileActions({ mode: 'native', platform: 'darwin', roots, runner })
     await expect(actions.capabilities()).resolves.toEqual({ reveal: true, airdrop: true })
     await actions.reveal([video])
     await actions.airdrop([video, path.join(imports, 'clip.mov')])
     expect(calls).toEqual([
       { command: 'open', args: ['-R', video], detach: false },
-      { command: 'osascript', args: ['/scripts/airdrop-share.applescript', video, path.join(imports, 'clip.mov')], detach: true },
+      { command: '/usr/local/bin/airdrop-share', args: [video, path.join(imports, 'clip.mov')], detach: true },
     ])
   })
 
@@ -85,7 +85,7 @@ describe('本地文件操作', () => {
   })
 
   it('非 Mac 不能 AirDrop', async () => {
-    const actions = new LocalFileActions({ mode: 'native', platform: 'linux', roots, runner: createNativeRunner('linux', '/unused', async () => undefined) })
+    const actions = new LocalFileActions({ mode: 'native', platform: 'linux', roots, runner: createNativeRunner('linux', async () => undefined) })
     await expect(actions.capabilities()).resolves.toEqual({ reveal: true, airdrop: false })
     await expect(actions.airdrop([video])).rejects.toThrow('不能使用 AirDrop')
   })

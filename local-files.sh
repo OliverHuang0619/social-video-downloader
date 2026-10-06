@@ -18,8 +18,20 @@ helper_ready() {
   [[ -s "$TOKEN_FILE" ]] && curl -fsS --max-time 2 -H "Authorization: Bearer $(<"$TOKEN_FILE")" "http://127.0.0.1:${PORT}/capabilities" >/dev/null 2>&1
 }
 
+compile_airdrop() {
+  local source="$ROOT_DIR/scripts/airdrop-share.swift" binary="$ROOT_DIR/config/airdrop-share"
+  if [[ "$(uname -s)" != "Darwin" || ! -f "$source" ]]; then return; fi
+  if [[ -x "$binary" && "$binary" -nt "$source" ]]; then return; fi
+  if ! command -v swiftc >/dev/null 2>&1; then
+    printf '未找到 swiftc，AirDrop 暂不可用。安装 Xcode 命令行工具后重新运行 ./local-files.sh start。\n' >&2
+    return
+  fi
+  swiftc -O -o "$binary" "$source" || printf 'AirDrop 助手编译失败。\n' >&2
+}
+
 start_helper() {
   mkdir -p "$ROOT_DIR/config" "$ROOT_DIR/downloads" "$ROOT_DIR/imports"
+  compile_airdrop
   command -v node >/dev/null 2>&1 || { printf '未找到本机 Node.js，无法打开目录或使用 AirDrop。\n' >&2; exit 1; }
   if [[ ! -s "$TOKEN_FILE" ]]; then
     umask 077

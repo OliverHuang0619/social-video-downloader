@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFile, spawn } from 'node:child_process'
-import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -8,8 +8,29 @@ import { fileURLToPath } from 'node:url'
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const listenHost = process.env.LOCAL_FILE_ACTIONS_HOST || '0.0.0.0'
 const listenPort = Number(process.env.LOCAL_FILE_ACTIONS_PORT || 9333)
-const scriptPath = path.join(rootDir, 'scripts', 'airdrop-share.applescript')
+const airdropSource = path.join(rootDir, 'scripts', 'airdrop-share.swift')
+const airdropBinary = path.join(rootDir, 'config', 'airdrop-share')
 const MAX_FILES = 40
+let airdropBuild
+
+function ensureAirdropBinary() {
+  if (!airdropBuild) {
+    airdropBuild = new Promise((resolve, reject) => {
+      const sourceTime = statSync(airdropSource).mtimeMs
+      let binaryTime = 0
+      try { binaryTime = statSync(airdropBinary).mtimeMs } catch { binaryTime = 0 }
+      if (binaryTime >= sourceTime) return resolve(airdropBinary)
+      mkdirSync(path.dirname(airdropBinary), { recursive: true })
+      execFile('swiftc', ['-O', '-o', airdropBinary, airdropSource], { timeout: 120_000 }, (error, _stdout, stderr) => {
+        if (error) {
+          airdropBuild = undefined
+          reject(new Error(String(stderr || error.message).trim() || '无法编译 AirDrop 助手。请安装 Xcode 命令行工具。'))
+        } else resolve(airdropBinary)
+      })
+    }).catch(error => { airdropBuild = undefined; throw error })
+  }
+  return airdropBuild
+}
 
 export function resolveAllowed(rootName, relative, directories) {
   if (rootName !== 'downloads' && rootName !== 'imports') throw new Error('目录无效')
@@ -28,7 +49,7 @@ function canReveal() {
 }
 
 function capabilities() {
-  return { reveal: canReveal(), airdrop: process.platform === 'darwin' && existsSync(scriptPath) }
+  return { reveal: canReveal(), airdrop: process.platform === 'darwin' && existsSync(airdropSource) }
 }
 
 function send(response, status, value) {
@@ -69,10 +90,11 @@ async function reveal(paths) {
   for (const directory of new Set(paths.map(file => path.dirname(file)))) await exec('xdg-open', [directory])
 }
 
-function airdrop(paths) {
+async function airdrop(paths) {
   if (process.platform !== 'darwin') throw Object.assign(new Error('AirDrop 仅在 Mac 上可用'), { statusCode: 409 })
+  const binary = await ensureAirdropBinary()
   return new Promise((resolve, reject) => {
-    const child = spawn('osascript', [scriptPath, ...paths], { detached: true, stdio: ['ignore', 'ignore', 'pipe'] })
+    const child = spawn(binary, paths, { detached: true, stdio: ['ignore', 'ignore', 'pipe'] })
     let error = ''
     let settled = false
     const finish = failure => {
@@ -85,7 +107,7 @@ function airdrop(paths) {
     const timer = setTimeout(() => { child.unref(); finish() }, 1200)
     child.stderr?.on('data', chunk => { if (error.length < 2_000) error += String(chunk) })
     child.once('error', failure => finish(failure))
-    child.once('exit', code => finish(code && code !== 0 ? new Error(error.trim() || `osascript 退出码 ${code}`) : undefined))
+    child.once('exit', code => finish(code && code !== 0 ? new Error(error.trim() || `AirDrop 助手退出码 ${code}`) : undefined))
   })
 }
 
