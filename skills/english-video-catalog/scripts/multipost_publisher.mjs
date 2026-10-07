@@ -18,6 +18,13 @@ function emit(event, data = {}) {
   process.stdout.write(`${JSON.stringify({ event, ...data })}\n`);
 }
 
+function redactDiagnosticLog(value) {
+  return String(value)
+    .replace(/(["']?(?:cookie|set-cookie|authorization|proxy-authorization|x-csrf-token)["']?\s*[:=]\s*["'])[^"']*(["'])/gi, "$1[REDACTED]$2")
+    .replace(/\b(sessionid|wxuin|token)\s*=\s*[^;\s,}"']+/gi, "$1=[REDACTED]")
+    .replace(/\bBearer\s+[A-Za-z0-9._~-]+/gi, "Bearer [REDACTED]");
+}
+
 async function launch() {
   if (cdpUrl) {
     const browser = await chromium.connectOverCDP(cdpUrl, {
@@ -61,7 +68,24 @@ async function screenshot(page, artifactDir, jobId) {
 async function pageText(page) {
   const parts = [];
   for (const frame of page.frames()) {
-    const text = await frame.locator("body").innerText({ timeout: 2000 }).catch(() => "");
+    // Playwright CSS locators pierce open shadow roots, so locator("body") can
+    // match both the document body and a Wujie body's shadow subtree. Read the
+    // frame's document.body directly, then walk its open roots explicitly.
+    const text = await frame.evaluate(() => {
+      const body = document.body;
+      if (!body) return "";
+      const parts = [body.innerText || ""];
+      const roots = [body];
+      while (roots.length) {
+        const root = roots.pop();
+        for (const element of root.querySelectorAll("*")) {
+          if (!element.shadowRoot) continue;
+          parts.push(element.shadowRoot.textContent || "");
+          roots.push(element.shadowRoot);
+        }
+      }
+      return parts.filter(Boolean).join("\n");
+    }).catch(() => "");
     if (text) parts.push(text);
   }
   return parts.join("\n");
@@ -573,6 +597,12 @@ async function publish(payloadPath) {
         emit("error", { message: loginRequiredMessage(latest.body || state.body, keepPage), screenshot: shot });
         return;
       }
+      state = await observePage(page);
+    }
+    if (!state.hasFileInput) {
+      const shot = await screenshot(page, payload.artifactDir, payload.jobId);
+      emit("error", { message: "MANUAL_REVIEW_REQUIRED：平台发布表单未加载，尚未上传视频；请检查页面后再重试", screenshot: shot });
+      return;
     }
     const finalHost = new URL(page.url()).hostname;
     if (!hostMatches(finalHost, payload.injectorHost)) {
@@ -615,6 +645,24 @@ async function publish(payloadPath) {
     });
     const body = await pageText(page);
     const shot = await screenshot(page, payload.artifactDir, payload.jobId);
+    if (payload.platform === "VIDEO_WEIXINCHANNEL" && payload.artifactDir) {
+      const expectedMarker = sync.data.content || sync.data.title || payload.title || "";
+      const marker = [...String(expectedMarker).replace(/\s+/g, "").trim()].slice(0, 20).join("").toLowerCase();
+      const normalizedBody = body.replace(/\s+/g, "").toLowerCase();
+      const diagnostic = {
+        url: page.isClosed() ? "" : page.url(),
+        event: outcome.event,
+        message: outcome.message,
+        marker,
+        markerPresent: marker.length >= 8 && normalizedBody.includes(marker),
+        videoManagementPresent: body.includes("视频管理"),
+        reviewPendingPresent: /审核中|待审核/.test(body),
+        postEditorPresent: body.includes("发布视频"),
+        body: body.slice(0, 20000),
+        logs: logs.slice(-100).map(redactDiagnosticLog),
+      };
+      await fs.promises.writeFile(path.join(payload.artifactDir, `${payload.jobId}.diagnostic.json`), JSON.stringify(diagnostic, null, 2)).catch(() => undefined);
+    }
     if (outcome.event === "error") {
       let message = outcome.message;
       if (message.includes("LOGIN_REQUIRED")) {

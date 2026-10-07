@@ -271,7 +271,7 @@ export class PublisherService {
     const cover = path.join(process.env.SVD_CONFIG_DIR || '/config', 'thumbnails', `${asset.id}.jpg`)
     const payload = douyin
       ? { jobId: job.id, file: asset.file, title: job.title, topics: job.topics, publishAt: job.publishAt, aigc: job.aigc, waitForCovers: job.waitForCovers, artifactDir: this.artifactDir }
-      : { jobId: job.id, platform: job.platform, injectUrl: multipostPlatform(job.platform)?.injectUrl, injectorHost: multipostPlatform(job.platform)?.injectorHost, file: asset.file, title: job.title, topics: job.topics, summary: asset.analysis?.summary || '', publishAt: job.publishAt, coverFile: existsSync(cover) ? cover : undefined, artifactDir: this.artifactDir }
+      : { jobId: job.id, platform: job.platform, injectUrl: multipostPlatform(job.platform)?.injectUrl, injectorHost: multipostPlatform(job.platform)?.injectorHost, file: asset.file, title: job.title, shortTitle: asset.analysis?.title || job.title, topics: job.topics, summary: asset.analysis?.summary || '', publishAt: job.publishAt, coverFile: existsSync(cover) ? cover : undefined, artifactDir: this.artifactDir }
     await writeFile(payloadPath, JSON.stringify(payload))
     let succeeded = false
     await this.execute(douyin ? this.douyinScript : this.multipostScript, ['publish', payloadPath], event => {

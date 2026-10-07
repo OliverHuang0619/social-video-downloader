@@ -28,8 +28,14 @@ export function classifyPublishOutcome({ url = '', body = '', notices = [], logs
   if (logFailure) return { event: 'error', message: `PUBLISH_FAILED：${String(logFailure).replace(/^PUBLISH_FAILED[：:]\s*/i, '')}` }
   if (SUBMITTED.some(text => noticeText.includes(text.toLowerCase()))) return { event: 'submitted' }
   if (SUCCESS.some(text => noticeText.includes(text.toLowerCase()))) return { event: scheduled ? 'scheduled' : 'published' }
-  const marker = [...String(expectedMarker).replace(/\s+/g, ' ').trim()].slice(0, 20).join('').toLowerCase()
-  if (marker.length >= 8 && pageText.includes(marker) && /视频管理/.test(body) && !/发布视频/.test(body)) return { event: 'submitted' }
+  const marker = [...String(expectedMarker).replace(/\s+/g, '').trim()].slice(0, 20).join('').toLowerCase()
+  const normalizedBody = body.replace(/\s+/g, '').toLowerCase()
+  // A matching item in Weixin Channels' video-management list confirms the
+  // submission; the visible review badge distinguishes submitted from published.
+  if (marker.length >= 8 && normalizedBody.includes(marker) && /视频管理/.test(body) && !/发布视频/.test(body)) {
+    if (scheduled) return { event: 'scheduled' }
+    return /审核中|待审核/.test(body) ? { event: 'submitted' } : { event: 'published' }
+  }
   if (logs.some(line => INJECTOR_FAILURE.test(String(line)))) return { event: 'error', message: 'MANUAL_REVIEW_REQUIRED：发布脚本未完成，请在平台页面检查' }
   // Only use broad page text as a fallback: upload history and help content can
   // contain stale success/failure words unrelated to the current submission.
