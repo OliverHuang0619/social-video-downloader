@@ -68,6 +68,20 @@ describe('MultiPost 视频平台', () => {
     }).message).toContain('LOGIN_REQUIRED')
   })
 
+  it('识别 B 站明确的稿件投递成功页为已提交审核', () => {
+    expect(classifyPublishOutcome({
+      url: 'https://member.bilibili.com/platform/upload/video/frame',
+      body: '视频投稿\n稿件投递成功\n查看进度\n再投一个',
+      hasFileInput: false,
+    })).toEqual({ event: 'submitted' })
+    expect(classifyPublishOutcome({
+      url: 'https://member.bilibili.com/platform/upload/video/frame',
+      body: '视频投稿\n稿件投递成功\n查看进度\n再投一个',
+      scheduled: true,
+      hasFileInput: false,
+    })).toEqual({ event: 'submitted' })
+  })
+
   it('发布载荷把摘要、话题和定时传给注入函数', () => {
     const urls = publishMediaUrls('job-1')
     const sync = buildSyncData({ platform: 'VIDEO_BILIBILI', file: '/downloads/lesson.mp4', title: 'Directions', summary: '练习问路。', topics: ['#英语启蒙', 'English'], publishAt: '2026-10-06T12:00:00.000Z', coverFile: '/config/thumbnails/job.jpg' }, urls)

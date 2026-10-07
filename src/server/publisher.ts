@@ -9,7 +9,7 @@ import type { BrowserStatus, PublishBatch, PublishJob, PublishPlatformAuth, Publ
 import type { AppDatabase } from './db'
 
 type PublishInput = { assetId: string; title: string; topics: string[]; publishAt?: string; aigc?: boolean; waitForCovers?: boolean }
-const terminal = new Set(['published', 'scheduled', 'failed', 'needs_login', 'needs_attention', 'interrupted', 'cancelled'])
+const terminal = new Set(['submitted', 'published', 'scheduled', 'failed', 'needs_login', 'needs_attention', 'interrupted', 'cancelled'])
 const cancellable = new Set(['queued', 'waiting_local', 'launching', 'waiting_login', 'uploading', 'scheduling', 'waiting_covers', 'submitting'])
 const publishTimeoutMs = 15 * 60_000
 const managedPlatforms = ['douyin', 'VIDEO_WEIXINCHANNEL', 'VIDEO_BILIBILI', 'VIDEO_TOUTIAOHAO']
@@ -185,10 +185,10 @@ export class PublisherService {
   private finalizeBatchStatus(batchId: string): PublishBatch['status'] {
     const latest = this.db.publishBatches().find(value => value.id === batchId)!
     const states = [...new Set(latest.jobs.map(job => job.status))]
-    if (states.every(value => value === 'published' || value === 'scheduled')) return 'completed'
+    if (states.every(value => ['submitted', 'published', 'scheduled'].includes(value))) return 'completed'
     if (states.every(value => value === 'cancelled')) return 'cancelled'
-    if (states.every(value => ['published', 'scheduled', 'cancelled'].includes(value))) return 'partial'
-    if (states.includes('published') || states.includes('scheduled')) return 'partial'
+    if (states.every(value => ['submitted', 'published', 'scheduled', 'cancelled'].includes(value))) return 'partial'
+    if (states.some(value => ['submitted', 'published', 'scheduled'].includes(value))) return 'partial'
     if (states.includes('needs_login') || states.includes('needs_attention')) return 'needs_attention'
     if (states.includes('cancelled') && states.every(value => terminal.has(value))) return 'cancelled'
     return 'failed'
@@ -279,11 +279,15 @@ export class PublisherService {
       const latest = this.db.publishBatches().find(value => value.id === job.batchId)?.jobs.find(value => value.id === job.id)
       if (latest?.status === 'cancelled') return
       const name = String(event.event)
-      if (['launching', 'waiting_login', 'uploading', 'scheduling', 'waiting_covers', 'submitting', 'published', 'scheduled'].includes(name)) {
+      if (['launching', 'waiting_login', 'uploading', 'scheduling', 'waiting_covers', 'submitting', 'submitted', 'published', 'scheduled'].includes(name)) {
         this.db.updatePublishJob(job.id, name as PublishJob['status'], { screenshot: event.screenshot ? String(event.screenshot) : undefined })
-        succeeded = name === 'published' || name === 'scheduled'
+        succeeded = name === 'submitted' || name === 'published' || name === 'scheduled'
         if (succeeded) this.db.setAssetState(job.assetId, 'processed')
-        if (name === 'waiting_login') { this.loginStatus = 'needs_login'; this.message = '请在发布浏览器中扫码登录，完成后会继续发布' }
+        if (name === 'waiting_login') {
+          this.loginStatus = 'needs_login'
+          this.message = '发布时检测到平台登录已失效，请在发布浏览器中扫码；登录后会继续发布'
+          if (managedPlatforms.includes(job.platform)) this.savePlatformAuth(job.platform, 'needs_login', '发布时平台跳转到登录页，请扫码登录；完成后发布会继续')
+        }
       }
       if (name === 'error') { const message = String(event.message || '发布失败'); const status = message.includes('LOGIN_REQUIRED') ? 'needs_login' : message.includes('MANUAL_REVIEW_REQUIRED') ? 'needs_attention' : 'failed'; this.db.updatePublishJob(job.id, status, { error: message, screenshot: event.screenshot ? String(event.screenshot) : undefined }); if (status === 'needs_login' && managedPlatforms.includes(job.platform)) this.savePlatformAuth(job.platform, 'needs_login', '发布时检测到未登录，请重新登录并验证'); this.loginStatus = status === 'needs_login' ? 'needs_login' : status === 'needs_attention' ? 'needs_attention' : this.loginStatus; this.message = message }
       this.changed()
@@ -294,7 +298,12 @@ export class PublisherService {
       if (latest && cancellable.has(latest.status)) this.db.updatePublishJob(job.id, 'cancelled', { error: '用户取消了发布任务' })
       return false
     }
-    if (succeeded) { this.loginStatus = 'ready'; this.message = douyin ? '抖音发布服务已就绪' : `${publishPlatformLabel(job.platform)}发布流程已结束`; this.changed() }
+    if (succeeded) {
+      this.loginStatus = 'ready'
+      this.message = douyin ? '抖音发布服务已就绪' : `${publishPlatformLabel(job.platform)}发布流程已结束`
+      if (managedPlatforms.includes(job.platform)) this.savePlatformAuth(job.platform, 'authorized', '发布时已确认平台登录有效')
+      this.changed()
+    }
     return succeeded
   }
   private execute(script: string, args: string[], onEvent: (event: Record<string, unknown>) => void, batchId?: string) {
@@ -311,12 +320,12 @@ export class PublisherService {
         resolve()
       }
       const consumeEvent = (event: Record<string, unknown>) => {
-        if (['published', 'scheduled', 'error', 'login_opened', 'login_ready', 'login_checked'].includes(String(event.event))) hasTerminalEvent = true
+        if (['submitted', 'published', 'scheduled', 'error', 'login_opened', 'login_ready', 'login_checked'].includes(String(event.event))) hasTerminalEvent = true
         onEvent(event)
         // A remote CDP websocket can keep Node alive after the page has closed. Once
         // the publisher reports a terminal result, give cleanup a short grace period
         // and then release the queue even if that connection is still holding open.
-        if (batchId && ['published', 'scheduled', 'error'].includes(String(event.event)) && !terminalTimer) {
+        if (batchId && ['submitted', 'published', 'scheduled', 'error'].includes(String(event.event)) && !terminalTimer) {
           const grace = Math.max(50, Number(process.env.SVD_PUBLISH_TERMINAL_GRACE_MS || 5_000) || 5_000)
           terminalTimer = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM') }, grace)
           terminalTimer.unref?.()

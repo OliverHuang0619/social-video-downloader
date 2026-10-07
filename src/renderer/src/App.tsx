@@ -2,7 +2,7 @@ import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom'
 import type { AnalysisJob, BrowserStatus, CodexConnectionPublic, CodexProviderPublic, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, CreatorSubscription, DownloadJob, DownloadOptions, HypitStatus, LocalFileActionsStatus, MediaAsset, MediaFileHash, MediaFileMetadata, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, QuickTimeQuality, RemakeJob, SubscriptionNotification, SubscriptionSchedule, ToolStatus } from '../../shared/types'
 import { automaticPlatformPublishTimes, filterMediaAssets, isRemakeMediaPath, mediaAssetDirectory, normalizePublishTopics, type LibraryStateFilter } from '../../shared/core'
-import { DOUYIN_PUBLISH_PLATFORM, MULTIPOST_PLATFORMS, publishPlatformLabel } from '../../shared/multipost-platforms'
+import { DOUYIN_PUBLISH_PLATFORM, MULTIPOST_PLATFORMS, multipostPlatform, publishPlatformLabel } from '../../shared/multipost-platforms'
 import { isCodexProviderModeSelectable, shouldShowCodexProvidersManager } from '../../shared/codex-connection-ui'
 import { DEFAULT_HYPIT_REMAKE_DIRECTION } from '../../shared/remake-direction'
 import { api, onEvent, type WorkbenchEvent } from './api'
@@ -65,7 +65,7 @@ function assetTitle(asset: MediaAsset) { return asset.analysis?.title || asset.f
 const formatBytes = (value: number) => value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(2)} GB` : value >= 1024 ** 2 ? `${(value / 1024 ** 2).toFixed(1)} MB` : `${Math.round(value / 1024)} KB`
 const formatGroups: Record<MediaFormatKind, string> = { 'video-audio': '视频与音频', 'video-only': '仅视频', 'audio-only': '仅音频' }
 const formatLabel = (format: MediaFormat) => `${format.height ? `${format.height}p` : format.bitrate ? `${Math.round(format.bitrate)}kbps` : '音频'} · ${format.ext.toUpperCase()}${format.quickTimeCompatible ? ' · QuickTime' : ''}`
-const taskNames: Record<string, string> = { queued: '等待中', downloading: '下载中', skipped: '已跳过', preparing: '准备媒体', analyzing: '分析中', directing: '创意制作中', building: '生成成片中', completed: '已完成', failed: '失败', cancelled: '已取消', waiting_local: '本地等待', running: '执行中', launching: '启动浏览器', waiting_login: '等待扫码', uploading: '上传中', scheduling: '设置排期', waiting_covers: '等待横竖封面', submitting: '提交中', published: '已发布', scheduled: '已排期', needs_login: '需要登录', needs_attention: '需要检查', interrupted: '已中断', partial: '部分完成' }
+const taskNames: Record<string, string> = { queued: '等待中', downloading: '下载中', skipped: '已跳过', preparing: '准备媒体', analyzing: '分析中', directing: '创意制作中', building: '生成成片中', completed: '已完成', failed: '失败', cancelled: '已取消', waiting_local: '本地等待', running: '执行中', launching: '启动浏览器', waiting_login: '等待扫码', uploading: '上传中', scheduling: '设置排期', waiting_covers: '等待横竖封面', submitting: '提交中', submitted: '已提交审核', published: '已发布', scheduled: '已排期', needs_login: '需要登录', needs_attention: '需要检查', interrupted: '已中断', partial: '部分完成' }
 const confidenceNames: Record<string, string> = { high: '高', medium: '中', low: '低' }
 type LibraryViewFilter = LibraryStateFilter | 'remade'
 const stateNames: Record<LibraryViewFilter, string> = { unprocessed: '未处理', processed: '已处理', 'awaiting-analysis': '等待分析', remade: '已重新制作', all: '全部' }
@@ -635,14 +635,23 @@ function AnalysisTask({ job, assets, reload }: { job: AnalysisJob; assets: Media
   </article>
 }
 
-function PublishBatchCard({ batch, reload }: { batch: PublishBatch; reload: () => void }) {
+function PublishBatchCard({ batch, assets, reload }: { batch: PublishBatch; assets: MediaAsset[]; reload: () => void }) {
   const douyinOnly = batch.jobs.every(job => !job.platform || job.platform === 'douyin')
-  const names = [...new Set(batch.jobs.map(job => publishPlatformLabel(job.platform)))].join('、')
+  const platformIds = [...new Set(batch.jobs.map(job => job.platform || DOUYIN_PUBLISH_PLATFORM))]
+  const platformUrl = (id: string) => id === DOUYIN_PUBLISH_PLATFORM
+    ? 'https://creator.douyin.com/creator-micro/content/manage'
+    : multipostPlatform(id)?.homeUrl || '#'
+  const assetById = new Map(assets.map(asset => [asset.id, asset]))
   return <article className="batch">
-    <div className="row between"><span className="task-title">{batch.dispatchMode === 'local' ? '本地定时' : douyinOnly ? '抖音平台排期' : names} <span className="data muted">· {batch.id.slice(0, 8)} · {new Date(batch.createdAt).toLocaleString()}</span></span><span className="row"><TaskElapsed createdAt={batch.createdAt} updatedAt={batch.updatedAt} active={['queued', 'waiting_local', 'running'].includes(batch.status)} /><span className={`pill ${batch.status}`}>{taskNames[batch.status] || batch.status}</span></span></div>
+    <div className="row between"><span className="task-title">{batch.dispatchMode === 'local' ? '本地定时' : <span className="publish-platform-links">{platformIds.map(id => <a key={id} href={platformUrl(id)} target="_blank" rel="noreferrer" title={`打开${publishPlatformLabel(id)}平台`}>{publishPlatformLabel(id)} ↗</a>)}</span>} <span className="data muted">· {batch.id.slice(0, 8)} · {new Date(batch.createdAt).toLocaleString()}</span></span><span className="row"><TaskElapsed createdAt={batch.createdAt} updatedAt={batch.updatedAt} active={['queued', 'waiting_local', 'running'].includes(batch.status)} /><span className={`pill ${batch.status}`}>{taskNames[batch.status] || batch.status}</span></span></div>
     <div className="publish-job publish-job-head"><span>作品</span><span>状态</span><span>本地提交时间</span><span>{douyinOnly ? '抖音发布时间' : '发布时间'}</span><span /></div>
     {batch.jobs.map(job => <div className="publish-job" key={job.id}>
-      <span title={job.title}>{publishPlatformLabel(job.platform)} · {job.title}</span>
+      <div className="publish-job-source">
+        {assetById.get(job.assetId) ? <div className="publish-job-thumb"><FirstFrame asset={assetById.get(job.assetId)!} /></div> : null}
+        <div className="publish-job-source-text"><strong title={job.title}><a className="publish-platform-link" href={platformUrl(job.platform || DOUYIN_PUBLISH_PLATFORM)} target="_blank" rel="noreferrer">{publishPlatformLabel(job.platform)} ↗</a> · {job.title}</strong>
+          {assetById.get(job.assetId) ? <small title={assetById.get(job.assetId)!.filename}>原视频：{assetTitle(assetById.get(job.assetId)!)} · {assetById.get(job.assetId)!.filename}{assetById.get(job.assetId)!.duration ? ` · ${formatDuration(assetById.get(job.assetId)!.duration)}` : ''}</small> : <small>原视频信息不可用</small>}
+        </div>
+      </div>
       <span className={`pill ${job.status}`}>{taskNames[job.status] || job.status}</span>
       <time>{job.submitAt ? new Date(job.submitAt).toLocaleString() : job.executeAt ? new Date(job.executeAt).toLocaleString() : '—'}</time>
       <time>{job.publishAt ? new Date(job.publishAt).toLocaleString() : batch.dispatchMode === 'local' ? '提交后立即发布' : '立即发布'}</time>
@@ -780,7 +789,6 @@ function TasksPage({ analysis, remakes, batches, assets, reload }: { analysis: A
       <button role="tab" aria-selected={taskTab === 'analysis'} className={taskTab === 'analysis' ? 'active' : ''} onClick={() => setTaskTab('analysis')}><strong>分析任务</strong><span>Codex 逐个执行</span><em>{analysis.length}</em></button>
       <button role="tab" aria-selected={taskTab === 'remake'} className={taskTab === 'remake' ? 'active' : ''} onClick={() => setTaskTab('remake')}><strong>Hypit 重新制作</strong><span>翻拍方案、工程与成片</span><em>{remakes.length}</em></button>
       <button role="tab" aria-selected={taskTab === 'publisher'} className={taskTab === 'publisher' ? 'active' : ''} onClick={() => setTaskTab('publisher')}><strong>发布任务</strong><span>共用一个浏览器串行提交</span><em>{batches.length}</em></button>
-      {taskTab === 'publisher' ? <a target="_blank" rel="noreferrer" href="https://creator.douyin.com/creator-micro/content/manage">在抖音查看作品管理 ↗</a> : null}
     </div>
     {taskTab === 'analysis' ? <>
       <div className="task-history-actions"><span>共 <span className="data">{analysis.length}</span> 条记录，<span className="data">{analysisHistoryCount}</span> 条已结束</span><button className="danger-text" disabled={!analysisHistoryCount} onClick={() => { if (window.confirm(`确认清除全部 ${analysisHistoryCount} 条已结束的分析历史？运行中的任务和媒体库分析结果将保留。`)) void api.analysis.clearHistory().then(reload) }}>清除已结束的历史</button></div>
@@ -790,7 +798,7 @@ function TasksPage({ analysis, remakes, batches, assets, reload }: { analysis: A
       <div className="task-list" role="tabpanel">{remakes.length ? remakes.map(job => <RemakeTask job={job} assets={assets} reload={reload} key={job.id} />) : <div className="empty"><strong>还没有重新制作任务</strong>在媒体库选择视频后点击「重新制作」</div>}</div>
     </> : <>
       <div className="task-history-actions"><span>共 <span className="data">{batches.length}</span> 条记录，<span className="data">{publishHistoryCount}</span> 条已结束</span><button className="danger-text" disabled={!publishHistoryCount} onClick={() => { if (window.confirm(`确认清除全部 ${publishHistoryCount} 条已结束的发布历史？运行中的批次会保留，已发布的作品不会撤回。`)) void api.publisher.clearHistory().then(reload) }}>清除已结束的历史</button></div>
-      <div className="task-list" role="tabpanel">{batches.length ? batches.map(batch => <PublishBatchCard batch={batch} reload={reload} key={batch.id} />) : <div className="empty"><strong>还没有发布任务</strong>在媒体库选择已分析的视频后点击「发布」</div>}</div>
+      <div className="task-list" role="tabpanel">{batches.length ? batches.map(batch => <PublishBatchCard batch={batch} assets={assets} reload={reload} key={batch.id} />) : <div className="empty"><strong>还没有发布任务</strong>在媒体库选择已分析的视频后点击「发布」</div>}</div>
     </>}
   </section>
 }

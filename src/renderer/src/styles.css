@@ -205,7 +205,7 @@ label > input:not([type="checkbox"]), label > select, label > textarea { display
   line-height: 18px;
   white-space: nowrap;
 }
-.pill.completed, .pill.published, .pill.scheduled, .pill.processed, .pill.ready, .pill.skipped { background: var(--ok-soft); color: var(--ok); }
+.pill.completed, .pill.submitted, .pill.published, .pill.scheduled, .pill.processed, .pill.ready, .pill.skipped { background: var(--ok-soft); color: var(--ok); }
 .pill.failed, .pill.needs_attention, .pill.interrupted, .pill.needs_login { background: var(--bad-soft); color: var(--bad); }
 .pill.analyzing, .pill.uploading, .pill.running, .pill.downloading, .pill.preparing, .pill.launching, .pill.waiting_login, .pill.scheduling, .pill.submitting, .pill.waiting_covers { background: var(--run-soft); color: var(--run); }
 .pill.partial { background: var(--warn-soft); color: var(--warn); }
@@ -812,7 +812,17 @@ button.small { min-height: 26px; padding: 0 8px; font-size: 12px; }
   border-top: 1px solid var(--line);
   font-size: 12.5px;
 }
-.publish-job > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.publish-job-source { display: flex; min-width: 0; align-items: center; gap: 9px; }
+.publish-job-thumb { width: 48px; height: 48px; flex: 0 0 48px; overflow: hidden; border-radius: 6px; background: var(--panel-2); }
+.publish-job-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.publish-job-thumb .preview-fallback { display: grid; width: 100%; height: 100%; place-items: center; color: var(--ink-3); }
+.publish-job-source-text { display: grid; min-width: 0; gap: 4px; }
+.publish-job-source-text strong, .publish-job-source-text small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.publish-job-source-text strong { font-weight: 500; }
+.publish-job-source-text small { color: var(--ink-3); font-size: 11px; }
+.publish-platform-links { display: inline-flex; flex-wrap: wrap; gap: 10px; }
+.publish-platform-links a, .publish-platform-link { color: var(--run); text-decoration: none; }
+.publish-platform-links a:hover, .publish-platform-link:hover { text-decoration: underline; }
 .publish-job time { color: var(--ink-2); font-size: 12px; }
 .publish-job .error { grid-column: 1 / -1; margin: 0; font-size: 12px; }
 .publish-job .actions { display: flex; gap: 6px; justify-content: flex-end; }

@@ -5,7 +5,7 @@ export type CookieSource = 'none' | 'file'
 export type MediaFormatKind = 'video-audio' | 'video-only' | 'audio-only'
 export type ProcessingState = 'unprocessed' | 'processed'
 export type AnalysisJobStatus = 'queued' | 'preparing' | 'analyzing' | 'completed' | 'failed' | 'cancelled'
-export type PublishJobStatus = 'queued' | 'waiting_local' | 'launching' | 'waiting_login' | 'uploading' | 'scheduling' | 'waiting_covers' | 'submitting' | 'published' | 'scheduled' | 'failed' | 'needs_login' | 'needs_attention' | 'interrupted' | 'cancelled'
+export type PublishJobStatus = 'queued' | 'waiting_local' | 'launching' | 'waiting_login' | 'uploading' | 'scheduling' | 'waiting_covers' | 'submitting' | 'submitted' | 'published' | 'scheduled' | 'failed' | 'needs_login' | 'needs_attention' | 'interrupted' | 'cancelled'
 export type RemakeJobStatus = 'queued' | 'preparing' | 'directing' | 'building' | 'completed' | 'failed' | 'cancelled'
 
 export interface MediaFormat {

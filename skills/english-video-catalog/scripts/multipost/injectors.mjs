@@ -912,6 +912,82 @@ export async function VideoBilibili(data) {
         console.log('未找到"完成"按钮');
         return false;
     }
+    function findRecommendedCoverCards() {
+        const heading = Array.from(document.querySelectorAll("body *")).find((element) => {
+            if (element.children.length > 2 || !/以下为系统推荐封面/.test(element.textContent || ""))
+                return false;
+            const rect = element.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+        });
+        if (!heading)
+            return [];
+        const headingRect = heading.getBoundingClientRect();
+        // Look only below the recommendation heading, where the suggested cover cards are rendered.
+        const candidates = Array.from(document.querySelectorAll("img, [style*='background-image'], canvas")).filter((visual) => {
+            const rect = visual.getBoundingClientRect();
+            const style = window.getComputedStyle(visual);
+            if (rect.width < 100 || rect.height < 60 || rect.top < headingRect.bottom - 4 || rect.top > headingRect.bottom + 500)
+                return false;
+            if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0)
+                return false;
+            // The AI generation tile precedes the system recommendations; never click it.
+            let node = visual;
+            for (let depth = 0; node && depth < 4; depth++, node = node.parentElement) {
+                const nodeRect = node.getBoundingClientRect();
+                // Ignore the AI tile itself, but not its large row that also contains the real recommendations.
+                if (/AI生成/.test(node.textContent || "") && nodeRect.width <= rect.width * 2.5 && nodeRect.height <= rect.height * 2.5)
+                    return false;
+                if (node === heading.parentElement)
+                    break;
+            }
+            return true;
+        });
+        candidates.sort((a, b) => {
+            const ar = a.getBoundingClientRect();
+            const br = b.getBoundingClientRect();
+            return ar.top - br.top || ar.left - br.left;
+        });
+        // Click the first visual recommendation. The click bubbles to the platform's card handler.
+        return candidates.slice(0, 3);
+    }
+    function hasSelectedCoverPreview() {
+        const coverMain = document.querySelector("div.cover-main");
+        if (!coverMain)
+            return false;
+        const visibleImage = Array.from(coverMain.querySelectorAll("img")).some((image) => {
+            const rect = image.getBoundingClientRect();
+            return rect.width >= 60 && rect.height >= 60 && Boolean(image.currentSrc || image.src) && !/placeholder|empty|default/i.test(image.currentSrc || image.src);
+        });
+        const visibleBackground = Array.from(coverMain.querySelectorAll("div, span")).some((element) => {
+            const rect = element.getBoundingClientRect();
+            return rect.width >= 60 && rect.height >= 60 && window.getComputedStyle(element).backgroundImage !== "none";
+        });
+        const placeholder = Array.from(coverMain.querySelectorAll("* > *")).some((element) => {
+            if (!/添加封面/.test(element.textContent || ""))
+                return false;
+            const rect = element.getBoundingClientRect();
+            const style = window.getComputedStyle(element);
+            return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+        });
+        return (visibleImage || visibleBackground) && !placeholder;
+    }
+    async function selectRecommendedCover() {
+        const candidates = findRecommendedCoverCards();
+        if (candidates.length === 0) {
+            console.warn("未找到系统推荐封面卡片");
+            return false;
+        }
+        for (const candidate of candidates) {
+            candidate.click();
+            await sleep(800);
+            if (hasSelectedCoverPreview()) {
+                console.log("已选择并确认第一张系统推荐封面");
+                return true;
+            }
+        }
+        console.warn("点击系统推荐封面后，封面预览仍为空");
+        return false;
+    }
     async function uploadVideo(file) {
         const fileInput = (await waitForElementOptional('input[type="file"]'));
         if (!fileInput) {
@@ -1051,13 +1127,17 @@ export async function VideoBilibili(data) {
         catch (error) {
             console.warn("Bilibili 标签处理失败，继续发布流程:", error);
         }
-        // Upload one cover best-effort.
-        const coverToUpload = horizontalCover || cover;
-        if (coverToUpload) {
-            await uploadCover(coverToUpload).catch((error) => {
-                console.warn("Bilibili 封面上传失败，继续发布流程:", error);
-                return false;
-            });
+        // The workbench uses Playwright mouse input for this platform's cover cards.
+        // DOM click() does not consistently trigger Bilibili's card selection handler.
+        if (data.deferSubmitToPublisher) {
+            console.log("Bilibili 表单已填写，等待工作台选择推荐封面并提交");
+            return;
+        }
+        // The requested workflow uses one of the platform's system recommendations.
+        const coverReady = await selectRecommendedCover();
+        if (!coverReady || !hasSelectedCoverPreview()) {
+            console.error("Bilibili 发布失败：未能确认系统推荐封面已选中；已停止自动提交");
+            return;
         }
         // 等待标签和封面处理完成
         await sleep(5000);
