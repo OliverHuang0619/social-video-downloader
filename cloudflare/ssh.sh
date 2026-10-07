@@ -49,7 +49,7 @@ process.stdin.on("end", () => {
   process.stdout.write(found.id);
 });
 ') || {
-  echo "没有找到容器 $CONTAINER_NAME。请先成功部署 Cloudflare 配置。" >&2
+  echo "没有找到容器 ${CONTAINER_NAME}。请先成功部署 Cloudflare 配置。" >&2
   exit 1
 }
 
@@ -91,5 +91,5 @@ if [ -z "${INSTANCE_ID:-}" ]; then
   exit 1
 fi
 
-echo "连接实例 $INSTANCE_ID……"
+echo "连接实例 ${INSTANCE_ID}……"
 exec npx wrangler containers ssh "$INSTANCE_ID" --identity-file "$KEY_FILE" --config "$CONFIG" -t
