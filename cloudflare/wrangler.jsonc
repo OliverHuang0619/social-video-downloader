@@ -23,7 +23,14 @@
 			"class_name": "WorkbenchContainer",
 			"max_instances": 1,
 			"instance_type": "standard-1",
-			"image": "../Dockerfile"
+			"image": "../Dockerfile",
+			"ssh": { "enabled": true },
+			"authorized_keys": [
+				{
+					"name": "oliver-mac",
+					"public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAII1vNaPJZFBzoGms0gy8MexlO81aZaHkMpD7WfVcspoW social-video-workbench"
+				}
+			]
 		}
 	],
 	"durable_objects": {

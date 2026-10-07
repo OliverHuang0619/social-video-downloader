@@ -15,6 +15,7 @@
     "smoke:deployments": "npm run build && node scripts/smoke-deployments.mjs",
     "cloudflare:resources": "node cloudflare/create-resources.mjs",
     "cloudflare:dev": "wrangler d1 migrations apply svw-workbench --local --config cloudflare/wrangler.jsonc && npm run build && wrangler dev --config cloudflare/wrangler.jsonc",
+    "cloudflare:ssh": "sh cloudflare/ssh.sh",
     "cloudflare:deploy": "sh cloudflare/deploy.sh"
   },
   "dependencies": {
