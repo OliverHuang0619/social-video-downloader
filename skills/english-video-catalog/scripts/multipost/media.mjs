@@ -52,26 +52,10 @@ export function normalizeWeixinChannelTitle(title) {
     .trim()
 }
 
-function chineseWeixinChannelTitle(title) {
-  const original = String(title || '').trim()
-  const separator = original.search(/[：:]/u)
-  const chineseFirst = separator >= 0 && /[A-Za-z]/.test(original.slice(separator + 1))
-    ? original.slice(0, separator)
-    : original
-  const withoutEnglish = chineseFirst
-    .replace(/[A-Za-z]+(?:['’][A-Za-z]+)*(?:\s+[A-Za-z]+(?:['’][A-Za-z]+)*)*/g, ' ')
-    .replace(/^[\s:：,，-]+|[\s:：,，-]+$/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-  return withoutEnglish || '视频'
-}
-
 export function buildSyncData(payload, urls) {
   const videoName = String(payload.file || 'video.mp4').split(/[/\\]/).pop() || 'video.mp4'
   const titleLimit = payload.platform === 'VIDEO_WEIXINCHANNEL' ? 16 : 0
-  const rawTitle = payload.platform === 'VIDEO_WEIXINCHANNEL'
-    ? chineseWeixinChannelTitle(payload.shortTitle || payload.title || '')
-    : payload.title || ''
+  const rawTitle = payload.title || ''
   const title = titleLimit ? clampPublishTitle(normalizeWeixinChannelTitle(rawTitle), titleLimit) : rawTitle
   const data = {
     title,

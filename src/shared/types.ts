@@ -146,6 +146,7 @@ export interface PublishJob {
   platform: string
   title: string
   topics: string[]
+  summary?: string
   publishAt?: string
   executeAt?: string
   submitAt?: string

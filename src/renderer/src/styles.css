@@ -667,6 +667,14 @@ button.small { min-height: 26px; padding: 0 8px; font-size: 12px; }
 .modal fieldset { margin: 14px 0 0; padding: 0; border: 0; }
 .modal fieldset legend { padding: 0; margin-bottom: 6px; color: var(--ink-3); font-size: 12px; }
 .modal fieldset .check { margin: 10px 0; }
+.publish-detail-list { max-height: 420px; overflow: auto; margin: 14px 0; padding-right: 4px; }
+.publish-detail-list > .hint { margin: 0 0 8px; }
+.publish-detail { margin: 8px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-2); }
+.publish-detail > summary { cursor: pointer; font-size: 12.5px; }
+.publish-detail > summary small { display: block; overflow: hidden; margin: 4px 0 0 18px; color: var(--ink-3); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.publish-detail > label { display: block; margin: 12px 0; }
+.publish-detail > label:last-child { margin-bottom: 2px; }
+.publish-detail textarea { min-height: 64px; }
 .platform-picker { display: flex; flex-wrap: wrap; gap: 8px; max-height: 168px; overflow: auto; }
 .platform-picker .chip { cursor: pointer; }
 .platform-login-list { max-height: 360px; overflow: auto; margin-top: 8px; }

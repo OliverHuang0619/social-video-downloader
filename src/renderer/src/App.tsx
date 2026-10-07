@@ -330,25 +330,36 @@ function DownloadPage({ jobs, setJobs }: { jobs: DownloadJob[]; setJobs: (jobs: 
 
 const managedPublishPlatforms = [
   { id: DOUYIN_PUBLISH_PLATFORM, label: '抖音' },
-  ...MULTIPOST_PLATFORMS.filter(platform => ['VIDEO_WEIXINCHANNEL', 'VIDEO_BILIBILI', 'VIDEO_TOUTIAOHAO'].includes(platform.id)),
+  ...MULTIPOST_PLATFORMS.filter(platform => ['VIDEO_BILIBILI', 'VIDEO_WEIXINCHANNEL', 'VIDEO_TOUTIAOHAO'].includes(platform.id)).sort((a, b) => ['VIDEO_BILIBILI', 'VIDEO_WEIXINCHANNEL', 'VIDEO_TOUTIAOHAO'].indexOf(a.id) - ['VIDEO_BILIBILI', 'VIDEO_WEIXINCHANNEL', 'VIDEO_TOUTIAOHAO'].indexOf(b.id)),
 ]
 
 function PublishDialog({ assets, close, done, platformAuth }: { assets: MediaAsset[]; close: () => void; done: () => void; platformAuth: BrowserStatus['platformAuth'] }) {
   const single = assets.length === 1
   const choices = managedPublishPlatforms.filter(platform => platformAuth[platform.id]?.status === 'authorized')
-  const [platforms, setPlatforms] = useState<string[]>([])
+  const [platforms, setPlatforms] = useState<string[]>(() => ["VIDEO_BILIBILI", "VIDEO_WEIXINCHANNEL"].filter(id => platformAuth[id]?.status === 'authorized'))
   const douyinSelected = platforms.includes(DOUYIN_PUBLISH_PLATFORM)
   const titleLimit = douyinSelected ? 30 : 100
   const [dispatchMode, setDispatch] = useState<'platform' | 'local'>('platform')
   const [scheduled, setScheduled] = useState(!single)
   const [start, setStart] = useState('')
   const [interval, setIntervalValue] = useState(1)
-  const [title, setTitle] = useState(assets[0]?.analysis?.englishTitle.slice(0, 30) || assets[0]?.filename.slice(0, 30) || '')
-  const [topics, setTopics] = useState(normalizePublishTopics(assets[0]?.analysis?.englishTitle.slice(0, 30) || assets[0]?.filename.slice(0, 30) || '', assets[0]?.analysis?.keyTopics || []).join(' '))
+  const [useChineseTitle, setUseChineseTitle] = useState(true)
+  const [details, setDetails] = useState<Record<string, { title: string; topics: string; summary: string }>>(() => Object.fromEntries(assets.map(asset => {
+    const title = asset.analysis?.title || asset.filename
+    return [asset.id, { title, topics: normalizePublishTopics(title, asset.analysis?.keyTopics || [], [asset.analysis?.title || '', asset.analysis?.englishTitle || '']).join(' '), summary: asset.analysis?.summary || '' }]
+  })))
   const [aigc, setAigc] = useState(true)
   const [waitForCovers, setWaitForCovers] = useState(false)
   const [message, setMessage] = useState('')
-  const topicCount = topics.split(/[#\s,，]+/).filter(Boolean).length
+  const firstDetails = details[assets[0]?.id] || { title: '', topics: '', summary: '' }
+  const topicCount = firstDetails.topics.split(/[#\s,，]+/).filter(Boolean).length
+  useEffect(() => {
+    setPlatforms(current => {
+      if (current.length) return current
+      const defaults = ["VIDEO_BILIBILI", "VIDEO_WEIXINCHANNEL"].filter(id => platformAuth[id]?.status === 'authorized')
+      return defaults.length ? defaults : current
+    })
+  }, [platformAuth])
   const togglePlatform = (id: string) => setPlatforms(current => {
     const next = current.includes(id) ? current.filter(item => item !== id) : [...current, id]
     if (!next.length) return current
@@ -361,16 +372,22 @@ function PublishDialog({ assets, close, done, platformAuth }: { assets: MediaAss
     const mode = douyinSelected && platforms.length === 1 ? dispatchMode : 'platform'
     const automatic = !single && douyinSelected && mode === 'platform' && !start
     const automaticTimes = automatic ? automaticPlatformPublishTimes(assets.length, interval) : []
-    if (scheduled && ((!startDate && !automatic) || (startDate && Number.isNaN(startDate.getTime())))) return setMessage('请选择有效的首条发布时间')
+    if (scheduled && (startDate && Number.isNaN(startDate.getTime()) || single && !startDate || mode === 'local' && !startDate)) return setMessage('请选择有效的首条发布时间')
     const limit = douyinSelected ? 30 : 100
-    const jobs = assets.map((asset, index) => ({ assetId: asset.id, title: single ? title : (asset.analysis?.englishTitle || asset.filename).slice(0, limit), topics: (single ? topics.split(/[#\s,，]+/) : asset.analysis?.keyTopics || ['英语学习']).filter(Boolean).slice(0, 5), publishAt: startDate ? new Date(startDate.getTime() + index * interval * 3600_000).toISOString() : automaticTimes[index], aigc, waitForCovers }))
+    const jobs = assets.map((asset, index) => {
+      const detail = details[asset.id] || { title: '', topics: '', summary: '' }
+      const assetTitle = (useChineseTitle ? asset.analysis?.title : asset.analysis?.englishTitle) || asset.filename
+      const publishTitle = single ? detail.title : detail.title || [...assetTitle].slice(0, limit).join('')
+      const customTopics = detail.topics.split(/[#\s,，]+/).filter(Boolean).slice(0, 5)
+      return { assetId: asset.id, title: publishTitle, topics: customTopics.length ? customTopics : normalizePublishTopics(publishTitle, asset.analysis?.keyTopics || ['英语学习'], [asset.analysis?.title || '', asset.analysis?.englishTitle || '']), summary: detail.summary, publishAt: scheduled && startDate ? new Date(startDate.getTime() + index * interval * 3600_000).toISOString() : automaticTimes[index], aigc, waitForCovers }
+    })
     const names = platforms.map(publishPlatformLabel).join('、')
     const count = jobs.length * platforms.length
-    const action = mode === 'local' ? '创建本地定时发布队列' : automatic ? '立即发布首条并按配置间隔提交其余抖音平台排期' : scheduled ? `提交到${names}` : `立即公开发布到${names}`
-    if (!window.confirm(`即将${action}，共 ${count} 个发布任务；浏览器每次提交将随机间隔 1–3 分钟，是否继续？`)) return
+    const action = mode === 'local' ? '创建本地定时发布队列' : automatic ? '立即发布首条并自动安排后续抖音排期' : scheduled && startDate ? `提交到${names}` : `立即公开发布到${names}`
+    if (!window.confirm(`即将${action}，共 ${count} 个发布任务；同一视频跨平台连续提交，同平台不同视频间随机等待 1–3 分钟，是否继续？`)) return
     try { await api.publisher.publish({ jobs, dispatchMode: mode, platforms, idempotencyKey: crypto.randomUUID() }); toast(`已创建 ${count} 个发布任务`); done() } catch (error) { setMessage(errorText(error)) }
   }
-  useEffect(() => { if (douyinSelected) setTitle(current => [...current].slice(0, 30).join('')) }, [douyinSelected])
+  useEffect(() => { if (douyinSelected) setDetails(current => Object.fromEntries(Object.entries(current).map(([id, value]) => [id, { ...value, title: [...value.title].slice(0, 30).join('') }]))) }, [douyinSelected])
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') close() }
     window.addEventListener('keydown', onKey)
@@ -378,20 +395,32 @@ function PublishDialog({ assets, close, done, platformAuth }: { assets: MediaAss
   }, [close])
   return <div className="modal-bg" role="dialog" aria-modal="true" aria-label="发布视频" onMouseDown={close}>
     <div className="modal" onMouseDown={event => event.stopPropagation()}>
-      <div className="modal-head"><h2>发布视频</h2><p>{single ? (assets[0].analysis?.title || assets[0].filename) : `${assets.length} 个视频，标题与话题取自各自的分析结果`}</p></div>
+      <div className="modal-head"><h2>发布视频</h2><p>{single ? (assets[0].analysis?.title || assets[0].filename) : `${assets.length} 个视频，将使用${useChineseTitle ? '中文' : '英文'}标题；话题和摘要留空时取自分析结果`}</p></div>
       <fieldset>
         <legend>发布平台</legend>
         {choices.length ? <div className="platform-picker" role="group" aria-label="发布平台">
           {choices.map(choice => <button type="button" className={`chip ${platforms.includes(choice.id) ? 'active' : ''}`} aria-pressed={platforms.includes(choice.id)} key={choice.id} onClick={() => togglePlatform(choice.id)}>{choice.label}</button>)}
         </div> : <p className="hint">尚无已授权平台。请先到「设置 → 发布浏览器」登录并验证授权。</p>}
       </fieldset>
+      <label className="check"><input type="checkbox" checked={useChineseTitle} onChange={event => { const chinese = event.target.checked; setUseChineseTitle(chinese); setDetails(current => Object.fromEntries(assets.map(asset => { const value = current[asset.id]; const title = (chinese ? asset.analysis?.title : asset.analysis?.englishTitle) || asset.filename; return [asset.id, { ...value, title: [...title].slice(0, titleLimit).join('') }] }))) }} />使用中文标题</label>
       {single ? <>
-        <label><span className="label-row">英文标题<span>{[...title].length} / {titleLimit}</span></span><input maxLength={titleLimit} value={title} onChange={event => setTitle(event.target.value)} /></label>
-        <label><span className="label-row">话题<span>{topicCount} / 5</span></span><input value={topics} onChange={event => setTopics(event.target.value)} placeholder="用空格分隔，最多 5 个" /></label>
+        <label><span className="label-row">{useChineseTitle ? '中文标题' : '英文标题'}<span>{[...firstDetails.title].length} / {titleLimit}</span></span><input maxLength={titleLimit} value={firstDetails.title} onChange={event => setDetails(current => ({ ...current, [assets[0].id]: { ...firstDetails, title: event.target.value } }))} /></label>
+        <label><span className="label-row">话题<span>{topicCount} / 5</span></span><input value={firstDetails.topics} onChange={event => setDetails(current => ({ ...current, [assets[0].id]: { ...firstDetails, topics: event.target.value } }))} placeholder="用空格分隔，最多 5 个" /></label>
+        <label><span className="label-row">摘要</span><textarea value={firstDetails.summary} onChange={event => setDetails(current => ({ ...current, [assets[0].id]: { ...firstDetails, summary: event.target.value } }))} rows={3} /><small className="hint">用于支持摘要的平台；抖音发布不包含摘要字段。</small></label>
+      </> : <div className="publish-detail-list"><p className="hint">逐个检查或修改每个视频的标题、话题和摘要。</p>{assets.map((asset, index) => {
+        const value = details[asset.id] || { title: '', topics: '', summary: '' }
+        const preview = `${value.title} · #${value.topics.split(/[#\s,，]+/).filter(Boolean).join(' #')} · ${value.summary}`
+        return <details className="publish-detail" key={asset.id} open={index === 0}><summary title={preview}>{index + 1}. {asset.analysis?.title || asset.filename}<small>{preview}</small></summary>
+          <label><span className="label-row">{useChineseTitle ? '中文标题' : '英文标题'}<span>{[...value.title].length} / {titleLimit}</span></span><input maxLength={titleLimit} value={value.title} onChange={event => setDetails(current => ({ ...current, [asset.id]: { ...value, title: event.target.value } }))} /></label>
+          <label><span className="label-row">话题</span><input value={value.topics} onChange={event => setDetails(current => ({ ...current, [asset.id]: { ...value, topics: event.target.value } }))} placeholder="用空格分隔，最多 5 个" /></label>
+          <label><span className="label-row">摘要</span><textarea value={value.summary} onChange={event => setDetails(current => ({ ...current, [asset.id]: { ...value, summary: event.target.value } }))} rows={3} /></label>
+        </details>
+      })}</div>}
+      {single ? <>
         <div className="field"><span id="publish-timing">发布时间</span><div className="segmented" role="tablist" aria-labelledby="publish-timing"><button type="button" role="tab" aria-selected={!scheduled} className={scheduled ? '' : 'active'} onClick={() => setScheduled(false)}>立即发布</button><button type="button" role="tab" aria-selected={scheduled} className={scheduled ? 'active' : ''} onClick={() => setScheduled(true)}>定时发布</button></div></div>
       </> : douyinSelected && platforms.length === 1 ? <label>批量执行方式<select value={dispatchMode} onChange={event => setDispatch(event.target.value as 'platform' | 'local')}><option value="platform">一次性提交到抖音平台排期</option><option value="local">本地到点后逐条提交</option></select></label> : <p className="hint">多个平台按队列串行提交，不使用本地定时。</p>}
       {scheduled ? <>
-        <label>{!single && douyinSelected ? '首条发布时间（留空：首条立即发布，其余从至少 2 小时后开始）' : !single ? '首条发布时间（留空则全部立即发布）' : '首条发布时间'}<input type="datetime-local" value={start} onChange={event => setStart(event.target.value)} /></label>
+        <label>{!single && douyinSelected && dispatchMode === 'platform' ? '首条发布时间（留空则首条立即发布，后续自动排期）' : !single ? '首条发布时间（留空则立即发布）' : '首条发布时间'}<input type="datetime-local" value={start} onChange={event => setStart(event.target.value)} /></label>
         {!single && (douyinSelected || start) ? <label>相邻作品的发布间隔（小时）<input type="number" min="1" value={interval} onChange={event => setIntervalValue(Math.max(1, Number(event.target.value)))} /></label> : null}
       </> : null}
       {douyinSelected ? <fieldset>
@@ -400,7 +429,7 @@ function PublishDialog({ assets, close, done, platformAuth }: { assets: MediaAss
         <label className="check"><input type="checkbox" checked={aigc} onChange={event => setAigc(event.target.checked)} />声明“内容由 AI 生成”</label>
         <label className="check"><input type="checkbox" checked={waitForCovers} onChange={event => setWaitForCovers(event.target.checked)} />等待横竖封面生成完成后再提交</label>
       </fieldset> : null}
-      <p className="warning">将通过可见浏览器依次提交所选平台；相邻任务随机间隔 1–3 分钟。单个平台失败会记录结果并继续后续任务；验证码或风控需要人工处理。没有识别到明确成功结果时，任务会标为需要检查。</p>
+      <p className="warning">将通过可见浏览器依次提交所选平台；同一视频跨平台连续提交，同平台不同视频间随机间隔 1–3 分钟。单个平台失败会记录结果并继续后续任务；验证码或风控需要人工处理。没有识别到明确成功结果时，任务会标为需要检查。</p>
       {message ? <p className="error">{message}</p> : null}
       <div className="modal-foot"><button onClick={close}>取消</button><button className="primary" onClick={() => void submit()}>确认发布</button></div>
     </div>

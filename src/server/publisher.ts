@@ -3,16 +3,24 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { localPublishSubmissionTimes, nextSafePlatformPublishTime, normalizePublishTopics } from '../shared/core'
+import { nextSafePlatformPublishTime, normalizePublishTopics, randomPublishSubmissionDelayMs } from '../shared/core'
 import { DOUYIN_TITLE_LIMIT, MULTIPOST_TITLE_LIMIT, isDouyinPublishPlatform, multipostPlatform, publishPlatformLabel, resolvePublishPlatforms } from '../shared/multipost-platforms'
 import type { BrowserStatus, PublishBatch, PublishJob, PublishPlatformAuth, PublishPlatformAuthState } from '../shared/types'
 import type { AppDatabase } from './db'
 
-type PublishInput = { assetId: string; title: string; topics: string[]; publishAt?: string; aigc?: boolean; waitForCovers?: boolean }
+type PublishInput = { assetId: string; title: string; topics: string[]; summary?: string; publishAt?: string; aigc?: boolean; waitForCovers?: boolean }
 const terminal = new Set(['submitted', 'published', 'scheduled', 'failed', 'needs_login', 'needs_attention', 'interrupted', 'cancelled'])
 const cancellable = new Set(['queued', 'waiting_local', 'launching', 'waiting_login', 'uploading', 'scheduling', 'waiting_covers', 'submitting'])
 const publishTimeoutMs = 15 * 60_000
 const managedPlatforms = ['douyin', 'VIDEO_WEIXINCHANNEL', 'VIDEO_BILIBILI', 'VIDEO_TOUTIAOHAO']
+function submissionTimesForAssets(assetIds: string[], now: Date, configuredCooldown?: string) {
+  let submitAt = now.getTime()
+  const fixedDelay = configuredCooldown === undefined ? undefined : Math.max(0, Number(configuredCooldown) || 0)
+  return assetIds.map((assetId, index) => {
+    if (index > 0 && assetId !== assetIds[index - 1]) submitAt += fixedDelay ?? randomPublishSubmissionDelayMs()
+    return new Date(submitAt).toISOString()
+  })
+}
 const platformProbeUrls: Record<string, string> = {
   douyin: 'https://creator.douyin.com/creator-micro/content/upload',
   VIDEO_WEIXINCHANNEL: 'https://channels.weixin.qq.com/platform/post/create',
@@ -107,15 +115,11 @@ export class PublisherService {
     const now = new Date(), id = randomUUID()
     const expanded = jobs.flatMap((input, index) => selected.map(platform => ({ input, index, platform })))
     const configuredCooldown = process.env.SVD_PUBLISH_COOLDOWN_MS
-    const submissionTimes = dispatchMode === 'platform'
-      ? configuredCooldown === undefined
-        ? localPublishSubmissionTimes(expanded.length, now)
-        : expanded.map((_, index) => new Date(now.getTime() + index * Math.max(0, Number(configuredCooldown) || 0)).toISOString())
-      : []
+    const submissionTimes = dispatchMode === 'platform' ? submissionTimesForAssets(expanded.map(item => item.input.assetId), now, configuredCooldown) : []
     const items: PublishJob[] = expanded.map(({ input, index, platform }, expandedIndex) => {
       const douyin = isDouyinPublishPlatform(platform)
       const asset = this.db.asset(input.assetId); if (!asset) throw new Error('视频不存在')
-      const title = input.title.trim(), topics = normalizePublishTopics(title, input.topics)
+      const title = input.title.trim(), topics = normalizePublishTopics(title, input.topics, [asset.analysis?.title || '', asset.analysis?.englishTitle || ''])
       const limit = douyin ? DOUYIN_TITLE_LIMIT : MULTIPOST_TITLE_LIMIT
       if (!title || [...title].length > limit) throw new Error(douyin ? '标题必须为 1–30 字符' : '标题必须为 1–100 字符')
       let publishAt: string | undefined, executeAt: string | undefined
@@ -132,7 +136,7 @@ export class PublisherService {
         }
       } else if (douyin && (dispatchMode === 'local' || (jobs.length > 1 && index > 0))) throw new Error('批量发布除首条立即发布外，其余任务必须指定排期时间')
       const submitAt = dispatchMode === 'local' ? executeAt : submissionTimes[expandedIndex]
-      return { id: `${id}-${String(expandedIndex + 1).padStart(3, '0')}`, batchId: id, assetId: asset.id, platform, title, topics, publishAt, executeAt, submitAt, aigc: input.aigc !== false, waitForCovers: douyin && input.waitForCovers === true, status: dispatchMode === 'local' ? 'waiting_local' : 'queued' }
+      return { id: `${id}-${String(expandedIndex + 1).padStart(3, '0')}`, batchId: id, assetId: asset.id, platform, title, topics, summary: input.summary === undefined ? asset.analysis?.summary || '' : input.summary.trim(), publishAt, executeAt, submitAt, aigc: input.aigc !== false, waitForCovers: douyin && input.waitForCovers === true, status: dispatchMode === 'local' ? 'waiting_local' : 'queued' }
     })
     const batch: PublishBatch = { id, dispatchMode, status: dispatchMode === 'local' ? 'waiting_local' : 'queued', createdAt: now.toISOString(), updatedAt: now.toISOString(), jobs: items }
     this.db.createPublishBatch(batch); if (idempotencyKey) this.db.setMeta(`publish:${idempotencyKey}`, id); this.db.audit('publish.created', { id, count: items.length, dispatchMode }); if (this.wakeTimer) clearTimeout(this.wakeTimer); this.wakeTimer = undefined; void this.pump(); this.changed(); return batch
@@ -144,11 +148,7 @@ export class PublisherService {
     const retryable = batch.jobs.filter(value => value.id === job.id || (value.id > job.id && value.status === 'interrupted' && value.error === '前一任务需要人工处理，批次已停止'))
     const configuredCooldown = process.env.SVD_PUBLISH_COOLDOWN_MS
     const retryNow = new Date()
-    const submissionTimes = batch.dispatchMode === 'platform'
-      ? configuredCooldown === undefined
-        ? localPublishSubmissionTimes(retryable.length, retryNow)
-        : retryable.map((_, index) => new Date(retryNow.getTime() + index * Math.max(0, Number(configuredCooldown) || 0)).toISOString())
-      : []
+    const submissionTimes = batch.dispatchMode === 'platform' ? submissionTimesForAssets(retryable.map(value => value.assetId), retryNow, configuredCooldown) : []
     retryable.forEach((value, index) => {
       const publishAt = batch.dispatchMode === 'platform' && isDouyinPublishPlatform(value.platform) && value.publishAt && new Date(value.publishAt).getTime() < Date.now() + 2 * 3600_000 + 60_000 ? nextSafePlatformPublishTime() : undefined
       this.db.updatePublishJob(value.id, batch.dispatchMode === 'local' && value.executeAt && new Date(value.executeAt) > new Date() ? 'waiting_local' : 'queued', { publishAt, submitAt: submissionTimes[index] })
@@ -271,7 +271,7 @@ export class PublisherService {
     const cover = path.join(process.env.SVD_CONFIG_DIR || '/config', 'thumbnails', `${asset.id}.jpg`)
     const payload = douyin
       ? { jobId: job.id, file: asset.file, title: job.title, topics: job.topics, publishAt: job.publishAt, aigc: job.aigc, waitForCovers: job.waitForCovers, artifactDir: this.artifactDir }
-      : { jobId: job.id, platform: job.platform, injectUrl: multipostPlatform(job.platform)?.injectUrl, injectorHost: multipostPlatform(job.platform)?.injectorHost, file: asset.file, title: job.title, shortTitle: asset.analysis?.title || job.title, topics: job.topics, summary: asset.analysis?.summary || '', publishAt: job.publishAt, coverFile: existsSync(cover) ? cover : undefined, artifactDir: this.artifactDir }
+      : { jobId: job.id, platform: job.platform, injectUrl: multipostPlatform(job.platform)?.injectUrl, injectorHost: multipostPlatform(job.platform)?.injectorHost, file: asset.file, title: job.title, shortTitle: job.title, topics: job.topics, summary: job.summary ?? asset.analysis?.summary ?? '', publishAt: job.publishAt, coverFile: existsSync(cover) ? cover : undefined, artifactDir: this.artifactDir }
     await writeFile(payloadPath, JSON.stringify(payload))
     let succeeded = false
     await this.execute(douyin ? this.douyinScript : this.multipostScript, ['publish', payloadPath], event => {

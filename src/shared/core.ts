@@ -44,12 +44,12 @@ export function filterMediaAssets(assets: MediaAsset[], state: LibraryStateFilte
 
 const comparablePublishText = (value: string) => value.normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
 
-export function normalizePublishTopics(title: string, topics: string[]): string[] {
-  const titleKey = comparablePublishText(title)
+export function normalizePublishTopics(title: string, topics: string[], alternateTitles: string[] = []): string[] {
+  const titleKeys = [title, ...alternateTitles].map(comparablePublishText).filter(Boolean)
   const repeatsTitle = (topic: string) => {
     const topicKey = comparablePublishText(topic)
-    if (!topicKey || !titleKey) return false
-    return topicKey === titleKey || (Math.min(topicKey.length, titleKey.length) >= 8 && (topicKey.startsWith(titleKey) || titleKey.startsWith(topicKey)))
+    if (!topicKey || !titleKeys.length) return false
+    return titleKeys.some(titleKey => topicKey === titleKey || (Math.min(topicKey.length, titleKey.length) >= 8 && (topicKey.startsWith(titleKey) || titleKey.startsWith(topicKey))))
   }
   const result = ['英语启蒙']
   const seen = new Set(result.map(comparablePublishText))
