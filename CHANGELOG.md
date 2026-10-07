@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.3.0 - 2026-10-07
+
+### Features
+
+- Show the application version and build time in the web interface.
+- Add per-platform login setup and authorization checks for Douyin, WeChat Channels, Bilibili, and Toutiao; only authorized platforms appear in the publish dialog.
+- Keep platform login sessions in the persistent browser profile.
+
+### Fixes
+
+- Normalize WeChat Channels titles to its supported punctuation and length rules.
+- Keep publishing batches moving after an individual platform fails, and record partial completion.
+- End publishing tasks that exit without a result or exceed the overall timeout.
+- Wait for platform confirmation and report uncertain outcomes for manual review.
+- Correct MultiPost platform URLs and enforce expected injector hostnames.
+
 ## 1.2.0 - 2026-10-04
 
 ### Features
