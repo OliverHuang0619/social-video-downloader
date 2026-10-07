@@ -103,9 +103,11 @@ export class DownloadQueue {
   get(id: string) { return this.jobs.get(id) }
   setReporter(report: (jobs: DownloadJob[]) => void) { this.report = report }
   /** Loads persisted jobs (e.g. after a restart) so history stays visible and failed jobs remain retryable. */
-  hydrate(jobs: DownloadJob[]) {
-    for (const job of [...jobs].reverse()) if (!this.jobs.has(job.id)) this.jobs.set(job.id, { ...job, status: ['queued', 'downloading'].includes(job.status) ? 'failed' : job.status, speed: undefined, eta: undefined })
+  hydrate(jobs: DownloadJob[], resumeActive = false) {
+    for (const job of [...jobs].reverse()) if (!this.jobs.has(job.id)) this.jobs.set(job.id, { ...job, status: ['queued', 'downloading'].includes(job.status) ? (resumeActive ? 'queued' : 'failed') : job.status, speed: undefined, eta: undefined })
   }
+  resumeHydrated() { this.pump() }
+  wake() { this.pump() }
   async start(request: StartRequest, report?: (jobs: DownloadJob[]) => void) {
     if (report) this.report = report
     for (const item of request.items) { const id = randomUUID(); this.jobs.set(id, { id, item, options: request.options, status: 'queued', progress: 0, attempts: 0 }) }

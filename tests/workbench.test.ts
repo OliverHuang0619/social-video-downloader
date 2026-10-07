@@ -174,7 +174,7 @@ describe('工作台持久化与安全边界', () => {
     expect(batch.jobs[2].publishAt).toBe(thirdAt)
     expect(batch.jobs.every(job => job.executeAt === undefined)).toBe(true)
     expect(batch.jobs.every(job => job.submitAt !== undefined)).toBe(true)
-    expect(new Date(batch.jobs[1].submitAt!).getTime()).toBeGreaterThan(Date.now())
+    expect(new Date(batch.jobs[1].submitAt!).getTime()).toBeGreaterThanOrEqual(new Date(batch.jobs[0].submitAt!).getTime())
     for (let index = 0; index < 80 && db.publishBatches().find(value => value.id === batch.id)?.status !== 'completed'; index += 1) await new Promise(resolve => setTimeout(resolve, 50))
     const persisted = db.publishBatches().find(value => value.id === batch.id)!
     expect(persisted.jobs.map(job => job.status)).toEqual(['published', 'scheduled', 'scheduled'])

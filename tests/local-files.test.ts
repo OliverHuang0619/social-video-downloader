@@ -39,7 +39,7 @@ describe('本地文件操作', () => {
     const calls: Array<{ command: string; args: string[]; detach: boolean }> = []
     const runner = createNativeRunner('darwin', async (command, args, detach) => { calls.push({ command, args, detach }) }, async () => '/usr/local/bin/airdrop-share')
     const actions = new LocalFileActions({ mode: 'native', platform: 'darwin', roots, runner })
-    await expect(actions.capabilities()).resolves.toEqual({ reveal: true, airdrop: true })
+    await expect(actions.capabilities()).resolves.toEqual({ reveal: true, airdrop: true, upload: false })
     await actions.reveal([video])
     await actions.airdrop([video, path.join(imports, 'clip.mov')])
     expect(calls).toEqual([
@@ -65,7 +65,7 @@ describe('本地文件操作', () => {
     expect(posted).toEqual([{ action: 'airdrop', files: [{ root: 'downloads', relative: 'lesson.mp4' }] }])
     expect(host.fetch).toBeTypeOf('function')
     const unavailable = new LocalFileActions({ mode: 'host', platform: 'linux', roots })
-    await expect(unavailable.capabilities()).resolves.toEqual({ reveal: false, airdrop: false })
+    await expect(unavailable.capabilities()).resolves.toEqual({ reveal: false, airdrop: false, upload: false })
     await expect(unavailable.reveal([video])).rejects.toThrow('不能打开文件所在目录')
   })
 
@@ -86,7 +86,7 @@ describe('本地文件操作', () => {
 
   it('非 Mac 不能 AirDrop', async () => {
     const actions = new LocalFileActions({ mode: 'native', platform: 'linux', roots, runner: createNativeRunner('linux', async () => undefined) })
-    await expect(actions.capabilities()).resolves.toEqual({ reveal: true, airdrop: false })
+    await expect(actions.capabilities()).resolves.toEqual({ reveal: true, airdrop: false, upload: false })
     await expect(actions.airdrop([video])).rejects.toThrow('不能使用 AirDrop')
   })
 })

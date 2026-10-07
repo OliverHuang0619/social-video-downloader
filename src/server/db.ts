@@ -1,18 +1,19 @@
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import type { AnalysisJob, AnalysisResult, CreatorSubscription, DownloadJob, MediaAsset, Platform, PublishBatch, PublishJob, RemakeJob, SubscriptionNotification } from '../shared/types'
+import { CloudflareD1SyncDatabase } from './cloudflare-d1-sync'
+import type { AnalysisJob, AnalysisResult, CreatorSubscription, DownloadJob, MediaAsset, Platform, PublishBatch, PublishJob, PushDevice, PushSubscriptionInput, RemakeJob, SubscriptionNotification } from '../shared/types'
 
 const configDir = process.env.SVD_CONFIG_DIR || path.join(process.cwd(), 'config')
 mkdirSync(configDir, { recursive: true })
 
 export class AppDatabase {
-  readonly sqlite = new DatabaseSync(path.join(configDir, 'workbench.sqlite'))
+  readonly sqlite: any
 
   constructor() {
-    this.sqlite.exec(`
-      PRAGMA journal_mode=WAL;
-      PRAGMA foreign_keys=ON;
+    const cloudflare = process.env.SVD_CLOUDFLARE_RUNTIME === '1'
+    this.sqlite = cloudflare ? new CloudflareD1SyncDatabase() : new DatabaseSync(path.join(configDir, 'workbench.sqlite'))
+    this.sqlite.exec(`${cloudflare ? '' : 'PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;'}
       CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS admin (id INTEGER PRIMARY KEY CHECK(id=1), password_hash TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS sessions (
@@ -54,16 +55,27 @@ export class AppDatabase {
         media_key TEXT NOT NULL, title TEXT NOT NULL, source_url TEXT NOT NULL, thumbnail TEXT,
         download_job_id TEXT, read_at TEXT, created_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS push_devices (
+        id TEXT PRIMARY KEY, endpoint TEXT NOT NULL UNIQUE, p256dh TEXT NOT NULL, auth TEXT NOT NULL,
+        label TEXT NOT NULL, created_at TEXT NOT NULL, last_sent_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS media_upload_tickets (
+        id TEXT PRIMARY KEY, object_key TEXT NOT NULL UNIQUE, filename TEXT NOT NULL, expires_at TEXT NOT NULL
+      );
     `)
-    const publishJobColumns = this.sqlite.prepare('PRAGMA table_info(publish_jobs)').all() as Array<{ name: string }>
-    if (!publishJobColumns.some(column => column.name === 'summary')) this.sqlite.exec('ALTER TABLE publish_jobs ADD COLUMN summary TEXT')
-    const analysisColumns = new Set((this.sqlite.prepare('PRAGMA table_info(analysis_jobs)').all() as { name: string }[]).map(column => column.name))
-    if (!analysisColumns.has('detail_json')) this.sqlite.exec("ALTER TABLE analysis_jobs ADD COLUMN detail_json TEXT NOT NULL DEFAULT '{}'")
-    const publishColumns = new Set((this.sqlite.prepare('PRAGMA table_info(publish_jobs)').all() as { name: string }[]).map(column => column.name))
-    if (!publishColumns.has('wait_for_covers')) this.sqlite.exec('ALTER TABLE publish_jobs ADD COLUMN wait_for_covers INTEGER NOT NULL DEFAULT 0')
-    if (!publishColumns.has('submit_at')) this.sqlite.exec('ALTER TABLE publish_jobs ADD COLUMN submit_at TEXT')
-    if (!publishColumns.has('platform')) this.sqlite.exec("ALTER TABLE publish_jobs ADD COLUMN platform TEXT NOT NULL DEFAULT 'douyin'")
-    this.sqlite.exec("UPDATE analysis_jobs SET status='failed', error='服务重启，原分析任务已中断', updated_at=datetime('now') WHERE status IN ('queued','preparing','analyzing')")
+    if (!cloudflare) {
+      const publishJobColumns = this.sqlite.prepare('PRAGMA table_info(publish_jobs)').all() as Array<{ name: string }>
+      if (!publishJobColumns.some(column => column.name === 'summary')) this.sqlite.exec('ALTER TABLE publish_jobs ADD COLUMN summary TEXT')
+      const analysisColumns = new Set((this.sqlite.prepare('PRAGMA table_info(analysis_jobs)').all() as { name: string }[]).map(column => column.name))
+      if (!analysisColumns.has('detail_json')) this.sqlite.exec("ALTER TABLE analysis_jobs ADD COLUMN detail_json TEXT NOT NULL DEFAULT '{}'")
+      const publishColumns = new Set((this.sqlite.prepare('PRAGMA table_info(publish_jobs)').all() as { name: string }[]).map(column => column.name))
+      if (!publishColumns.has('wait_for_covers')) this.sqlite.exec('ALTER TABLE publish_jobs ADD COLUMN wait_for_covers INTEGER NOT NULL DEFAULT 0')
+      if (!publishColumns.has('submit_at')) this.sqlite.exec('ALTER TABLE publish_jobs ADD COLUMN submit_at TEXT')
+      if (!publishColumns.has('platform')) this.sqlite.exec("ALTER TABLE publish_jobs ADD COLUMN platform TEXT NOT NULL DEFAULT 'douyin'")
+    }
+    this.sqlite.exec(cloudflare
+      ? "UPDATE analysis_jobs SET status='queued', error=NULL, updated_at=datetime('now') WHERE status IN ('queued','preparing','analyzing')"
+      : "UPDATE analysis_jobs SET status='failed', error='服务重启，原分析任务已中断', updated_at=datetime('now') WHERE status IN ('queued','preparing','analyzing')")
     this.sqlite.exec("UPDATE publish_jobs SET status='interrupted', error='服务曾在发布过程中重启，请先到对应平台确认是否已经发布' WHERE status IN ('launching','waiting_login','uploading','scheduling','waiting_covers','submitting')")
     this.sqlite.exec("UPDATE publish_batches SET status='interrupted', updated_at=datetime('now') WHERE status='running'")
     this.sqlite.exec("UPDATE media_assets SET processing_state='processed', updated_at=datetime('now') WHERE id IN (SELECT asset_id FROM publish_jobs WHERE status IN ('published','scheduled'))")
@@ -74,11 +86,21 @@ export class AppDatabase {
     const interruptedDownloads = this.sqlite.prepare('SELECT id,payload FROM download_jobs').all() as { id: string; payload: string }[]
     for (const row of interruptedDownloads) {
       const job = JSON.parse(row.payload) as DownloadJob
-      if (['queued', 'downloading'].includes(job.status)) { job.status = 'failed'; job.error = '服务重启，原下载任务已中断'; job.detail = undefined; this.saveDownload(job) }
+      if (['queued', 'downloading'].includes(job.status)) {
+        job.status = cloudflare ? 'queued' : 'failed'
+        job.error = cloudflare ? undefined : '服务重启，原下载任务已中断'
+        job.detail = cloudflare ? '容器恢复后从持久任务记录继续' : undefined
+        this.saveDownload(job)
+      }
     }
     for (const row of this.sqlite.prepare('SELECT id,payload FROM remake_jobs').all() as { id: string; payload: string }[]) {
       const job = JSON.parse(row.payload) as RemakeJob
-      if (['queued', 'preparing', 'directing', 'building'].includes(job.status)) { job.status = 'failed'; job.error = '服务重启，原 Hypit 任务已中断；工程文件已保留'; job.message = '任务已中断'; this.saveRemake(job) }
+      if (['queued', 'preparing', 'directing', 'building'].includes(job.status)) {
+        job.status = cloudflare ? 'queued' : 'failed'
+        job.error = cloudflare ? undefined : '服务重启，原 Hypit 任务已中断；工程文件已保留'
+        job.message = cloudflare ? '等待 Cloudflare 容器恢复任务' : '任务已中断'
+        this.saveRemake(job)
+      }
     }
   }
 
@@ -130,6 +152,15 @@ export class AppDatabase {
   /** Removes assets together with their publish history; batches left empty are removed too. */
   deleteAssets(ids: string[]) {
     if (!ids.length) return 0
+    if (this.sqlite instanceof CloudflareD1SyncDatabase) {
+      const placeholders = ids.map(() => '?').join(',')
+      const results = this.sqlite.batch([
+        { sql: `DELETE FROM publish_jobs WHERE asset_id IN (${placeholders})`, values: ids },
+        { sql: 'DELETE FROM publish_batches WHERE NOT EXISTS (SELECT 1 FROM publish_jobs WHERE batch_id=publish_batches.id)', values: [] },
+        { sql: `DELETE FROM media_assets WHERE id IN (${placeholders})`, values: ids },
+      ])
+      return results[2]?.meta?.changes ?? 0
+    }
     this.sqlite.exec('BEGIN')
     try {
       const placeholders = ids.map(() => '?').join(',')
@@ -294,6 +325,33 @@ export class AppDatabase {
     const placeholders = ids.map(() => '?').join(',')
     return this.sqlite.prepare(`UPDATE subscription_notifications SET read_at=? WHERE id IN (${placeholders}) AND read_at IS NULL`).run(now, ...ids).changes
   }
+  savePushDevice(id: string, value: PushSubscriptionInput) {
+    const now = new Date().toISOString()
+    this.sqlite.prepare(`INSERT INTO push_devices(id,endpoint,p256dh,auth,label,created_at,last_sent_at)
+      VALUES(?,?,?,?,?,?,NULL) ON CONFLICT(endpoint) DO UPDATE SET p256dh=excluded.p256dh,auth=excluded.auth,label=excluded.label`).run(
+        id, value.endpoint, value.keys.p256dh, value.keys.auth, value.label?.slice(0, 100) || '此浏览器', now,
+      )
+    return this.sqlite.prepare('SELECT id FROM push_devices WHERE endpoint=?').get(value.endpoint) as { id: string }
+  }
+  pushDevices(): PushDevice[] {
+    return (this.sqlite.prepare('SELECT id,label,created_at,last_sent_at FROM push_devices ORDER BY created_at DESC').all() as Record<string, unknown>[]).map(row => ({
+      id: String(row.id), label: String(row.label), createdAt: String(row.created_at), lastSentAt: row.last_sent_at ? String(row.last_sent_at) : undefined,
+    }))
+  }
+  pushDeviceSubscriptions() {
+    return this.sqlite.prepare('SELECT id,endpoint,p256dh,auth,label FROM push_devices').all() as Array<{ id: string; endpoint: string; p256dh: string; auth: string; label: string }>
+  }
+  removePushDevice(id: string) { return this.sqlite.prepare('DELETE FROM push_devices WHERE id=?').run(id).changes > 0 }
+  removePushEndpoint(endpoint: string) { return this.sqlite.prepare('DELETE FROM push_devices WHERE endpoint=?').run(endpoint).changes > 0 }
+  touchPushDevice(id: string) { this.sqlite.prepare('UPDATE push_devices SET last_sent_at=? WHERE id=?').run(new Date().toISOString(), id) }
+  createMediaUploadTicket(value: { id: string; objectKey: string; filename: string; expiresAt: string }) {
+    this.sqlite.prepare('INSERT INTO media_upload_tickets(id,object_key,filename,expires_at) VALUES(?,?,?,?)').run(value.id, value.objectKey, value.filename, value.expiresAt)
+  }
+  mediaUploadTicket(id: string) {
+    const row = this.sqlite.prepare('SELECT id,object_key,filename,expires_at FROM media_upload_tickets WHERE id=?').get(id) as { id: string; object_key: string; filename: string; expires_at: string } | undefined
+    return row ? { id: row.id, objectKey: row.object_key, filename: row.filename, expiresAt: row.expires_at } : undefined
+  }
+  deleteMediaUploadTicket(id: string) { return this.sqlite.prepare('DELETE FROM media_upload_tickets WHERE id=?').run(id).changes > 0 }
   assetBySourceUrl(sourceUrl: string) {
     const row = this.sqlite.prepare('SELECT * FROM media_assets WHERE source_url=?').get(sourceUrl) as Record<string, unknown> | undefined
     return row ? this.mapAsset(row) : undefined

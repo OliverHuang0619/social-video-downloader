@@ -1,0 +1,41 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "social-video-workbench",
+  "main": "./worker.ts",
+  "compatibility_date": "2026-10-07",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "assets": {
+    "directory": "../dist/client",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/remote-browser/*"]
+  },
+  "containers": [
+    {
+      "class_name": "WorkbenchContainer",
+      "max_instances": 1,
+      "image": "../Dockerfile"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "APP_CONTAINER", "class_name": "WorkbenchContainer" }]
+  },
+  "exports": {
+    "WorkbenchContainer": { "type": "durable-object", "storage": "sqlite" }
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "svw-workbench",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "./migrations"
+    }
+  ],
+  "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "svw-workbench-media" }],
+  "queues": {
+    "producers": [{ "binding": "JOBS", "queue": "svw-workbench-jobs" }],
+    "consumers": [{ "queue": "svw-workbench-jobs", "max_batch_size": 1, "max_retries": 5 }]
+  },
+  "triggers": { "crons": ["* * * * *"] }
+}

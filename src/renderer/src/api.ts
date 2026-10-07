@@ -1,4 +1,4 @@
-import type { AnalysisJob, AuthStatus, BrowserStatus, CodexConnectionPublic, CodexConnectionTestResult, CodexProviderPublic, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, CreatorSubscription, DownloadJob, HypitStatus, LocalFileActionsStatus, MediaAsset, MediaFileHash, MediaFileMetadata, PublishBatch, RemakeJob, ScanEvent, SubscriptionNotification, SubscriptionSchedule, SubscriptionStatus, ToolStatus, ToolUpdateEvent } from '../../shared/types'
+import type { AnalysisJob, AuthStatus, BrowserStatus, CodexConnectionPublic, CodexConnectionTestResult, CodexProviderPublic, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, CreatorSubscription, DownloadJob, HypitStatus, LocalFileActionsStatus, MediaAsset, MediaFileHash, MediaFileMetadata, PublishBatch, PushDevice, PushSubscriptionInput, RemakeJob, ScanEvent, SubscriptionNotification, SubscriptionSchedule, SubscriptionStatus, ToolStatus, ToolUpdateEvent } from '../../shared/types'
 
 let csrfToken = ''
 let events: EventSource | undefined
@@ -6,7 +6,8 @@ const listeners = new Set<(event: { type: string; [key: string]: unknown }) => v
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const mutating = init?.method && !['GET', 'HEAD'].includes(init.method)
-  const response = await fetch(url, { ...init, headers: { ...(init?.body ? { 'content-type': 'application/json' } : {}), ...(mutating && csrfToken ? { 'x-csrf-token': csrfToken } : {}), ...init?.headers } })
+  const isFormData = typeof FormData !== 'undefined' && init?.body instanceof FormData
+  const response = await fetch(url, { ...init, headers: { ...(init?.body && !isFormData ? { 'content-type': 'application/json' } : {}), ...(mutating && csrfToken ? { 'x-csrf-token': csrfToken } : {}), ...init?.headers } })
   const value = await response.json().catch(() => ({}))
   if (!response.ok) throw new Error(value.error || `请求失败 (${response.status})`)
   return value as T
@@ -40,7 +41,7 @@ export const api = {
     list: () => request<DownloadJob[]>('/api/downloads/jobs'), start: (value: import('../../shared/types').StartRequest) => post<DownloadJob[]>('/api/downloads/start', value), cancel: (id?: string) => post<void>('/api/downloads/cancel', { id }), retry: (id?: string) => post<{ count: number }>('/api/downloads/retry', id ? { id } : {}), fileUrl: (id: string) => `/api/downloads/${encodeURIComponent(id)}/file`,
   },
   library: {
-    list: () => request<MediaAsset[]>('/api/library'), import: (directory: string) => post<{ count: number }>('/api/library/import', { directory }), remove: (ids: string[], deleteFiles: boolean) => post<{ count: number; deletedFiles: number; failed: string[] }>('/api/library/delete', { ids, deleteFiles }), state: (id: string, state: MediaAsset['processingState']) => post<MediaAsset>(`/api/library/${encodeURIComponent(id)}/state`, { state }), hash: (id: string) => request<MediaFileHash>(`/api/library/${encodeURIComponent(id)}/hash`), metadata: (id: string) => request<MediaFileMetadata>(`/api/library/${encodeURIComponent(id)}/metadata`), localActions: () => request<LocalFileActionsStatus>('/api/library/local-actions'), reveal: (ids: string[]) => post<{ count: number }>('/api/library/reveal', { ids }), airdrop: (ids: string[]) => post<{ count: number }>('/api/library/airdrop', { ids }), thumbnailUrl: (id: string) => `/api/library/${encodeURIComponent(id)}/thumbnail`, mediaUrl: (id: string) => `/api/library/${encodeURIComponent(id)}/media`, fileUrl: (id: string) => `/api/library/${encodeURIComponent(id)}/file`,
+    list: () => request<MediaAsset[]>('/api/library'), import: (directory: string) => post<{ count: number }>('/api/library/import', { directory}), upload: async (file: File) => { const ticket = await post<{ id: string; uploadUrl: string }>('/api/library/upload-ticket', { filename: file.name }); const response = await fetch(ticket.uploadUrl, { method: 'PUT', body: file }); if (!response.ok) throw new Error(`上传到 R2 失败 (${response.status})`); return post<MediaAsset>('/api/library/upload-complete', { id: ticket.id }) }, remove: (ids: string[], deleteFiles: boolean) => post<{ count: number; deletedFiles: number; failed: string[] }>('/api/library/delete', { ids, deleteFiles }), state: (id: string, state: MediaAsset['processingState']) => post<MediaAsset>(`/api/library/${encodeURIComponent(id)}/state`, { state }), hash: (id: string) => request<MediaFileHash>(`/api/library/${encodeURIComponent(id)}/hash`), metadata: (id: string) => request<MediaFileMetadata>(`/api/library/${encodeURIComponent(id)}/metadata`), localActions: () => request<LocalFileActionsStatus>('/api/library/local-actions'), reveal: (ids: string[]) => post<{ count: number }>('/api/library/reveal', { ids }), airdrop: (ids: string[]) => post<{ count: number }>('/api/library/airdrop', { ids }), thumbnailUrl: (id: string) => `/api/library/${encodeURIComponent(id)}/thumbnail`, mediaUrl: (id: string) => `/api/library/${encodeURIComponent(id)}/media`, fileUrl: (id: string) => `/api/library/${encodeURIComponent(id)}/file`,
   },
   analysis: { list: () => request<AnalysisJob[]>('/api/analysis/jobs'), start: (assetIds: string[], force = false) => post<AnalysisJob>('/api/analysis/jobs', { assetIds, force }), cancel: (id: string) => post<void>(`/api/analysis/jobs/${id}/cancel`), retry: (id: string) => post<AnalysisJob>(`/api/analysis/jobs/${id}/retry`), delete: (id: string) => request<void>(`/api/analysis/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' }), clearHistory: () => request<{ count: number }>('/api/analysis/jobs', { method: 'DELETE' }) },
   remakes: { list: () => request<RemakeJob[]>('/api/remakes'), start: (assetIds: string[], direction: string, mode: RemakeJob['mode'], budget?: string) => post<RemakeJob>('/api/remakes', { assetIds, direction, mode, budget }), cancel: (id: string) => post<void>(`/api/remakes/${encodeURIComponent(id)}/cancel`), retry: (id: string) => post<RemakeJob>(`/api/remakes/${encodeURIComponent(id)}/retry`), delete: (id: string) => request<void>(`/api/remakes/${encodeURIComponent(id)}`, { method: 'DELETE' }), clearHistory: () => request<{ count: number }>('/api/remakes', { method: 'DELETE' }) },
@@ -68,11 +69,17 @@ export const api = {
     update: (id: string, value: { autoDownload?: boolean; enabled?: boolean; displayName?: string }) => patch<CreatorSubscription>(`/api/subscriptions/${encodeURIComponent(id)}`, value),
     remove: (id: string) => request<void>(`/api/subscriptions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     schedule: () => request<SubscriptionSchedule>('/api/subscriptions/schedule'),
-    updateSchedule: (value: { enabled?: boolean; hour?: number; minute?: number }) => patch<SubscriptionSchedule>('/api/subscriptions/schedule', value),
+    updateSchedule: (value: { enabled?: boolean; hour?: number; minute?: number; timeZone?: string }) => patch<SubscriptionSchedule>('/api/subscriptions/schedule', value),
     poll: () => post<SubscriptionStatus>('/api/subscriptions/poll'),
     notifications: () => request<{ notifications: SubscriptionNotification[]; unreadCount: number; schedule: SubscriptionSchedule }>('/api/subscriptions/notifications'),
     markRead: (value: { ids?: string[]; all?: boolean } = {}) => post<{ unreadCount: number }>('/api/subscriptions/notifications/read', value),
     status: () => request<SubscriptionStatus>('/api/subscriptions/status'),
+  },
+  push: {
+    publicKey: () => request<{ publicKey: string }>('/api/push/public-key'),
+    devices: () => request<PushDevice[]>('/api/push/devices'),
+    addDevice: (value: PushSubscriptionInput) => post<{ id: string }>('/api/push/devices', value),
+    removeDevice: (id: string) => request<{ removed: boolean }>(`/api/push/devices/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   },
 }
 

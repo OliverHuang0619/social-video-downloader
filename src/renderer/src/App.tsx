@@ -1,6 +1,6 @@
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type SyntheticEvent } from 'react'
 import { createPortal } from 'react-dom'
-import type { AnalysisJob, BrowserStatus, CodexConnectionPublic, CodexProviderPublic, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, CreatorSubscription, DownloadJob, DownloadOptions, HypitStatus, LocalFileActionsStatus, MediaAsset, MediaFileHash, MediaFileMetadata, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, QuickTimeQuality, RemakeJob, SubscriptionNotification, SubscriptionSchedule, ToolStatus } from '../../shared/types'
+import type { AnalysisJob, BrowserStatus, CodexConnectionPublic, CodexProviderPublic, CodexStatus, CookieFileView, CookieManagerStatus, CookiePlatform, CreatorSubscription, DownloadJob, DownloadOptions, HypitStatus, LocalFileActionsStatus, MediaAsset, MediaFileHash, MediaFileMetadata, MediaFormat, MediaFormatKind, MediaItem, PublishBatch, PushDevice, PushSubscriptionInput, QuickTimeQuality, RemakeJob, SubscriptionNotification, SubscriptionSchedule, ToolStatus } from '../../shared/types'
 import { automaticPlatformPublishTimes, filterMediaAssets, isRemakeMediaPath, mediaAssetDirectory, normalizePublishTopics, type LibraryStateFilter } from '../../shared/core'
 import { DOUYIN_PUBLISH_PLATFORM, MULTIPOST_PLATFORMS, multipostPlatform, publishPlatformLabel } from '../../shared/multipost-platforms'
 import { isCodexProviderModeSelectable, shouldShowCodexProvidersManager } from '../../shared/codex-connection-ui'
@@ -544,7 +544,8 @@ const AssetCard = memo(function AssetCard({ asset, selected, remade, toggle, pla
 })
 
 function LibraryPage({ assets, remakes, reload, openTasks, platformAuth }: { assets: MediaAsset[]; remakes: RemakeJob[]; reload: () => void; openTasks: (taskTab: TaskTab) => void; platformAuth: BrowserStatus['platformAuth'] }) {
-  const [selected, setSelected] = useState<Set<string>>(new Set()), [queryInput, setQueryInput] = useState(''), [state, setState] = useState<LibraryViewFilter>('unprocessed'), [category, setCategory] = useState('all'), [directory, setDirectory] = useState(() => storedValue(LIBRARY_DIRECTORY_STORAGE_KEY, 'all')), [playing, setPlaying] = useState<MediaAsset>(), [publishing, setPublishing] = useState<MediaAsset[]>(), [remaking, setRemaking] = useState<MediaAsset[]>(), [deleting, setDeleting] = useState<MediaAsset[]>(), [importOpen, setImportOpen] = useState(false), [importPath, setImportPath] = useState('/downloads'), [importing, setImporting] = useState(false), [message, setMessage] = useState(''), [localActions, setLocalActions] = useState<LocalFileActionsStatus>({ reveal: false, airdrop: false })
+  const [selected, setSelected] = useState<Set<string>>(new Set()), [queryInput, setQueryInput] = useState(''), [state, setState] = useState<LibraryViewFilter>('unprocessed'), [category, setCategory] = useState('all'), [directory, setDirectory] = useState(() => storedValue(LIBRARY_DIRECTORY_STORAGE_KEY, 'all')), [playing, setPlaying] = useState<MediaAsset>(), [publishing, setPublishing] = useState<MediaAsset[]>(), [remaking, setRemaking] = useState<MediaAsset[]>(), [deleting, setDeleting] = useState<MediaAsset[]>(), [importOpen, setImportOpen] = useState(false), [importPath, setImportPath] = useState('/downloads'), [importing, setImporting] = useState(false), [uploading, setUploading] = useState(false), [message, setMessage] = useState(''), [localActions, setLocalActions] = useState<LocalFileActionsStatus>({ reveal: false, airdrop: false, upload: false })
+  const uploadInput = useRef<HTMLInputElement>(null)
   const query = useDeferredValue(queryInput.trim())
   const categories = useMemo(() => [...new Set(assets.map(asset => asset.analysis?.category).filter(Boolean) as string[])].sort(), [assets])
   const sourceAssets = useMemo(() => assets.filter(asset => !isRemakeMediaPath(asset.file)), [assets])
@@ -581,7 +582,7 @@ function LibraryPage({ assets, remakes, reload, openTasks, platformAuth }: { ass
   const revealOne = useCallback(async (asset: MediaAsset) => { try { await api.library.reveal([asset.id]); toast(localActions.airdrop ? '已在访达中显示该文件' : '已打开所在目录') } catch (error) { toast(errorText(error), 'bad') } }, [localActions.airdrop])
   const share = useCallback(async (items: MediaAsset[]) => { try { await api.library.airdrop(items.map(asset => asset.id)); toast(items.length > 1 ? `已打开 AirDrop，可分享 ${items.length} 个文件` : '已打开 AirDrop') } catch (error) { toast(errorText(error), 'bad') } }, [])
   const shareOne = useCallback((asset: MediaAsset) => { void share([asset]) }, [share])
-  useEffect(() => { void api.library.localActions().then(setLocalActions).catch(() => setLocalActions({ reveal: false, airdrop: false })) }, [])
+  useEffect(() => { void api.library.localActions().then(setLocalActions).catch(() => setLocalActions({ reveal: false, airdrop: false, upload: false })) }, [])
   const analyze = async (force = false) => { if (!chosen.length) return; if (force && !window.confirm('将重新分析所选视频并覆盖已有分析结果，是否继续？')) return; try { await api.analysis.start(chosen.map(asset => asset.id), force); toast(`已为 ${chosen.length} 个视频创建分析任务`); openTasks('analysis') } catch (error) { setMessage(errorText(error)) } }
   const runImport = async () => { setImporting(true); setMessage(''); try { const result = await api.library.import(importPath); toast(`已导入 ${result.count} 个视频`); reload() } catch (error) { setMessage(errorText(error)) } finally { setImporting(false) } }
   const allVisibleSelected = visible.length > 0 && visible.every(asset => selected.has(asset.id))
@@ -591,13 +592,13 @@ function LibraryPage({ assets, remakes, reload, openTasks, platformAuth }: { ass
         <div className="search"><SearchIcon /><input type="search" value={queryInput} onChange={event => setQueryInput(event.target.value)} placeholder="搜索文件名、标题、话题或摘要" aria-label="搜索媒体库" /></div>
         <select value={directory} onChange={event => setDirectory(event.target.value)} aria-label="媒体目录"><option value="all">全部目录</option>{directories.map(value => <option key={value} value={value}>{value}</option>)}</select>
         <select value={category} onChange={event => setCategory(event.target.value)} aria-label="分类"><option value="all">全部分类</option>{categories.map(value => <option key={value}>{value}</option>)}</select>
-        <button className="ghost" aria-expanded={importOpen} onClick={() => setImportOpen(value => !value)}>导入目录</button>
+        {localActions.upload ? <><input ref={uploadInput} type="file" accept="video/*,.mkv,.avi" hidden onChange={async event => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; if (!file) return; setUploading(true); setMessage(''); try { await api.library.upload(file); toast(`已上传 ${file.name}`); reload() } catch (error) { setMessage(errorText(error)) } finally { setUploading(false) } }} /><button disabled={uploading} onClick={() => uploadInput.current?.click()}>{uploading ? '上传中…' : '上传视频'}</button></> : <button className="ghost" aria-expanded={importOpen} onClick={() => setImportOpen(value => !value)}>导入目录</button>}
       </div>
       <div className="toolbar-row between">
         <div className="state-chips" role="tablist" aria-label="处理状态"><span className="label">状态</span>{stateOrder.map(value => <button role="tab" aria-selected={state === value} className={`chip ${state === value ? 'active' : ''}`} key={value} onClick={() => setState(value)}>{stateNames[value]}<em>{stateCounts[value]}</em></button>)}</div>
         {filtered ? <button className="ghost" onClick={() => { setQueryInput(''); setState('unprocessed'); setCategory('all'); setDirectory('all') }}>重置筛选</button> : null}
       </div>
-      {importOpen ? <div className="import-row">
+      {importOpen && !localActions.upload ? <div className="import-row">
         <input value={importPath} onChange={event => setImportPath(event.target.value)} aria-label="服务器目录" />
         <button disabled={importing || !importPath.trim()} onClick={() => void runImport()}>{importing ? '导入中…' : '导入该目录'}</button>
         <span className="hint">扫描服务器目录中的视频并登记到媒体库，仅允许 /downloads 与 /imports</span>
@@ -1074,15 +1075,97 @@ function NotificationBell() {
   </div>
 }
 
+function PushSettingsPanel() {
+  const [devices, setDevices] = useState<PushDevice[]>([])
+  const [currentDeviceId, setCurrentDeviceId] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  const load = useCallback(async () => {
+    try {
+      const values = await api.push.devices()
+      setDevices(values)
+      const savedId = window.localStorage.getItem('social-video-workbench:push-device:v1') || ''
+      setCurrentDeviceId(savedId)
+      if ('serviceWorker' in navigator && 'PushManager' in window) {
+        const registration = await navigator.serviceWorker.getRegistration('/')
+        const subscription = await registration?.pushManager.getSubscription()
+        if (subscription) {
+          const saved = await api.push.addDevice({ ...subscription.toJSON(), label: pushDeviceLabel() } as PushSubscriptionInput)
+          window.localStorage.setItem('social-video-workbench:push-device:v1', saved.id)
+          setCurrentDeviceId(saved.id)
+          setDevices(await api.push.devices())
+        }
+      }
+    } catch (error) { setMessage(errorText(error)) }
+  }, [])
+  useEffect(() => { void load() }, [load])
+  const enable = async () => {
+    setBusy(true); setMessage('')
+    try {
+      if (!('serviceWorker' in navigator) || !('PushManager' in window) || typeof Notification === 'undefined') throw new Error('当前浏览器不支持 Web Push')
+      const permission = Notification.permission === 'default' ? await Notification.requestPermission() : Notification.permission
+      if (permission !== 'granted') throw new Error('请允许浏览器发送通知后再启用离线推送')
+      const registration = await navigator.serviceWorker.register('/sw.js')
+      const { publicKey } = await api.push.publicKey()
+      let subscription = await registration.pushManager.getSubscription()
+      if (!subscription) subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: decodeVapidKey(publicKey) })
+      const saved = await api.push.addDevice({ ...subscription.toJSON(), label: pushDeviceLabel() } as PushSubscriptionInput)
+      window.localStorage.setItem('social-video-workbench:push-device:v1', saved.id)
+      setCurrentDeviceId(saved.id)
+      await load()
+      toast('已启用此设备的离线通知')
+    } catch (error) { setMessage(errorText(error)) }
+    finally { setBusy(false) }
+  }
+  const remove = async (device: PushDevice) => {
+    setBusy(true); setMessage('')
+    try {
+      if (device.id === currentDeviceId && 'serviceWorker' in navigator) {
+        const registration = await navigator.serviceWorker.getRegistration('/')
+        await (await registration?.pushManager.getSubscription())?.unsubscribe()
+        window.localStorage.removeItem('social-video-workbench:push-device:v1')
+        setCurrentDeviceId('')
+      }
+      await api.push.removeDevice(device.id)
+      await load()
+    } catch (error) { setMessage(errorText(error)) }
+    finally { setBusy(false) }
+  }
+  return <div className="settings-section" role="tabpanel">
+    <h2>离线通知</h2>
+    <p>启用后，即使工作台页面关闭，此浏览器仍可收到订阅博主的新视频提醒。服务器部署需要 HTTPS；本机访问 localhost 可直接启用。</p>
+    <div className="row"><button className="primary" disabled={busy} onClick={() => void enable()}>{busy ? '处理中…' : currentDeviceId ? '刷新此设备订阅' : '启用此设备'}</button></div>
+    {devices.length ? <div className="platform-login-list">{devices.map(device => <div className="status-row" key={device.id}>
+      <div><strong>{device.label}{device.id === currentDeviceId ? '（此设备）' : ''}</strong><small>启用于 {new Date(device.createdAt).toLocaleString()}{device.lastSentAt ? ` · 最近发送 ${new Date(device.lastSentAt).toLocaleString()}` : ''}</small></div>
+      <button className="ghost" disabled={busy} onClick={() => void remove(device)}>撤销</button>
+    </div>)}</div> : <p className="muted">尚无已启用设备。</p>}
+    {message ? <p className="error">{message}</p> : null}
+  </div>
+}
+
+function decodeVapidKey(value: string) {
+  const padding = '='.repeat((4 - value.length % 4) % 4)
+  const bytes = atob(value.replace(/-/g, '+').replace(/_/g, '/') + padding)
+  return Uint8Array.from(bytes, character => character.charCodeAt(0))
+}
+
+function pushDeviceLabel() {
+  const agent = navigator.userAgent
+  const browser = /Edg\//.test(agent) ? 'Edge' : /Firefox\//.test(agent) ? 'Firefox' : /Chrome\//.test(agent) ? 'Chrome' : /Safari\//.test(agent) ? 'Safari' : '浏览器'
+  const platform = /Macintosh|Mac OS/.test(agent) ? 'macOS' : /Windows/.test(agent) ? 'Windows' : /Android/.test(agent) ? 'Android' : /iPhone|iPad/.test(agent) ? 'iOS' : /Linux/.test(agent) ? 'Linux' : ''
+  return `${browser}${platform ? ` · ${platform}` : ''}`
+}
+
 function SubscriptionSettingsPanel() {
   const [schedule, setSchedule] = useState<SubscriptionSchedule | null>(null)
   const [hour, setHour] = useState(0)
   const [minute, setMinute] = useState(0)
+  const [timeZone, setTimeZone] = useState('Asia/Shanghai')
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const load = useCallback(() => {
     void api.subscriptions.schedule().then(value => {
-      setSchedule(value); setHour(value.hour); setMinute(value.minute)
+      setSchedule(value); setHour(value.hour); setMinute(value.minute); setTimeZone(value.timeZone)
     }).catch(error => setMessage(errorText(error)))
   }, [])
   useEffect(load, [load])
@@ -1090,7 +1173,7 @@ function SubscriptionSettingsPanel() {
   const save = async () => {
     setBusy(true); setMessage('')
     try {
-      const value = await api.subscriptions.updateSchedule({ enabled: schedule?.enabled ?? true, hour, minute })
+      const value = await api.subscriptions.updateSchedule({ enabled: schedule?.enabled ?? true, hour, minute, timeZone })
       setSchedule(value); toast('巡检时间已保存')
     } catch (error) { setMessage(errorText(error)) }
     finally { setBusy(false) }
@@ -1115,11 +1198,13 @@ function SubscriptionSettingsPanel() {
       <label>时<select value={hour} onChange={event => setHour(Number(event.target.value))}>{Array.from({ length: 24 }, (_, index) => <option key={index} value={index}>{String(index).padStart(2, '0')}</option>)}</select></label>
       <label>分<select value={minute} onChange={event => setMinute(Number(event.target.value))}>{Array.from({ length: 60 }, (_, index) => <option key={index} value={index}>{String(index).padStart(2, '0')}</option>)}</select></label>
     </div>
-    <p className="muted">时区跟随服务器 TZ（默认 Asia/Shanghai）。下次巡检：{schedule?.nextPollAt ? new Date(schedule.nextPollAt).toLocaleString() : '—'}{schedule?.lastPollAt ? ` · 上次 ${new Date(schedule.lastPollAt).toLocaleString()}` : ''}</p>
+    <label>时区<input value={timeZone} onChange={event => setTimeZone(event.target.value)} list="subscription-timezones" placeholder="Asia/Shanghai" /><datalist id="subscription-timezones"><option value="Asia/Shanghai" /><option value="Asia/Tokyo" /><option value="Asia/Singapore" /><option value="America/Los_Angeles" /><option value="America/New_York" /><option value="Europe/London" /><option value="Europe/Berlin" /><option value="UTC" /></datalist></label>
+    <p className="muted">时区使用 IANA 名称。下次巡检：{schedule?.nextPollAt ? new Date(schedule.nextPollAt).toLocaleString(undefined, { timeZone: schedule.timeZone }) : '—'}{schedule?.lastPollAt ? ` · 上次 ${new Date(schedule.lastPollAt).toLocaleString(undefined, { timeZone: schedule.timeZone })}` : ''}</p>
     <div className="row">
       <button className="primary" disabled={busy} onClick={() => void save()}>保存时间</button>
       <button disabled={busy || schedule?.polling} onClick={() => void poll()}>{schedule?.polling ? '巡检中…' : '立即巡检'}</button>
     </div>
+    <PushSettingsPanel />
     {message ? <p className="error">{message}</p> : null}
   </div>
 }

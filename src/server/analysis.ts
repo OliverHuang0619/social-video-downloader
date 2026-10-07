@@ -70,7 +70,18 @@ export class AnalysisService {
   private active?: { id: string; child?: ChildProcessWithoutNullStreams }
   private root = path.join(process.env.SVD_CONFIG_DIR || '/config', 'analysis')
   private skillDir = process.env.SVD_SKILL_DIR || path.resolve(process.cwd(), 'skills/english-video-catalog')
-  constructor(private db: AppDatabase, private codex: CodexService, private changed: () => void) {}
+  constructor(private db: AppDatabase, private codex: CodexService, private changed: () => void, private resolveMediaFile?: (assetId: string) => Promise<string>) {}
+  resumeQueued() {
+    if (this.active) return false
+    const job = this.db.analyses().find(value => value.status === 'queued')
+    if (!job) return false
+    const output = this.db.analysisOutputDir(job.id)
+    if (!output) return false
+    this.active = { id: job.id }
+    void this.run(job.id, output)
+    this.changed()
+    return true
+  }
   start(assetIds: string[], force = false, reusableOutput?: string) {
     const unique = [...new Set(assetIds)]; if (!unique.length) throw new Error('请选择要分析的视频')
     if (this.active) throw new Error('已有分析任务正在运行')
@@ -118,7 +129,8 @@ export class AnalysisService {
   }
   private async run(id: string, output: string) {
     try {
-      const job = this.db.analysis(id)!; const assets = job.assetIds.map(assetId => this.db.asset(assetId)!)
+      const job = this.db.analysis(id)!; const storedAssets = job.assetIds.map(assetId => this.db.asset(assetId)!)
+      const assets = await Promise.all(storedAssets.map(async asset => ({ ...asset, file: this.resolveMediaFile ? await this.resolveMediaFile(asset.id) : asset.file })))
       await mkdir(output, { recursive: true }); await writeFile(path.join(output, 'files.json'), JSON.stringify(assets.map(asset => asset.file)))
       const reusePrepared = await this.hasReusableManifest(output, assets)
       this.addLog(id, 'prepare', 'info', reusePrepared ? `复用上次已准备的 ${assets.length} 个视频证据` : '开始读取媒体信息、字幕并生成九宫格联系表', { status: 'preparing', progress: reusePrepared ? 30 : 5, message: reusePrepared ? '正在复用已准备的媒体证据' : '正在准备媒体证据', processedItems: reusePrepared ? assets.length : 0 })
@@ -150,7 +162,7 @@ export class AnalysisService {
       this.addLog(id, 'validate', 'info', 'Codex 已结束，正在读取并校验结构化结果', { progress: 92, message: '正在校验分析结果' })
       const parsed = JSON.parse(await readFile(path.join(output, 'results.json'), 'utf8'))
       const validated = this.validate(parsed, new Set(assets.map(asset => path.resolve(asset.file))))
-      for (const asset of assets) this.db.setAnalysis(asset.id, validated.get(path.resolve(asset.file))!)
+      for (const asset of storedAssets) this.db.setAnalysis(asset.id, validated.get(path.resolve(assets.find(value => value.id === asset.id)!.file))!)
       this.addLog(id, 'complete', 'result', `结果校验通过，已写入 ${assets.length} 个视频的标题、分类、话题和摘要`, { status: 'completed', progress: 100, message: `已完成 ${assets.length} 个视频的分析`, currentItem: undefined })
       this.db.audit('analysis.completed', { id, count: assets.length })
     } catch (error) {

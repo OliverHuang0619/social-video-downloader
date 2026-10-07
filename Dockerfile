@@ -54,3 +54,19 @@ VOLUME ["/downloads", "/imports", "/config"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/docker-entrypoint.sh"]
 CMD ["node", "dist/server/index.js"]
+
+FROM runtime AS cloudflare-runtime
+USER root
+ENV DISPLAY=:99 \
+    SVD_BROWSER_CDP=http://127.0.0.1:9222 \
+    SVD_BROWSER_VNC=http://127.0.0.1:6080 \
+    SVD_BROWSER_MODE=container \
+    SVD_RUNTIME=cloudflare
+RUN apt-get -o Acquire::Retries=3 update \
+    && apt-get install -y --no-install-recommends chromium xvfb openbox x11vnc novnc websockify curl fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
+COPY cloudflare-entrypoint.sh /usr/local/bin/cloudflare-entrypoint.sh
+COPY cloudflare-profile-crypto.mjs /usr/local/bin/cloudflare-profile-crypto.mjs
+RUN chmod 0755 /usr/local/bin/cloudflare-entrypoint.sh
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/cloudflare-entrypoint.sh"]
+CMD ["node", "/app/dist/server/index.js"]

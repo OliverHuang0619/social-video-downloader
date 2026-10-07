@@ -2,6 +2,7 @@ import { createReadStream } from 'node:fs'
 import { mkdir, realpath, stat } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import path from 'node:path'
+import { timingSafeEqual } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import httpProxy from 'http-proxy'
 import { ConfigStore } from '../main/config'
@@ -22,6 +23,7 @@ import { HypitConfigStore } from './hypit-config'
 import { HypitCliService } from './hypit-cli'
 import { SubscriptionService } from './subscriptions'
 import { createLocalFileActions } from './local-files'
+import { PushService } from './push'
 
 type ServerEvent =
   | { type: 'tools'; event: ToolUpdateEvent }
@@ -35,14 +37,17 @@ const changed = (type: 'library' | 'analysis' | 'remake' | 'publisher' | 'codex'
 const config = new ConfigStore(), tools = new ToolManager(), media = new MediaService(tools), queue = new DownloadQueue(tools)
 const db = new AppDatabase(), auth = new AuthService(db), library = new LibraryService(db), codex = new CodexService(() => changed('codex'))
 const reportDownloads = (jobs: ReturnType<DownloadQueue['snapshot']>) => { void library.syncDownloads(jobs).then(() => changed('library')); publish({ type: 'downloads', jobs }) }
-queue.setReporter(reportDownloads); queue.hydrate(db.downloads())
-const analysis = new AnalysisService(db, codex, () => changed('analysis')), publisher = new PublisherService(db, () => changed('publisher'))
+queue.setReporter(reportDownloads); queue.hydrate(db.downloads(), process.env.SVD_CLOUDFLARE_RUNTIME === '1')
+const analysis = new AnalysisService(db, codex, () => changed('analysis'), id => library.resolvedFile(id)), publisher = new PublisherService(db, () => changed('publisher'), id => library.resolvedFile(id))
 const hypitConfig = new HypitConfigStore()
 const hypitCli = new HypitCliService(hypitConfig)
 const remake = new RemakeService(db, library, codex, hypitConfig, () => changed('remake'))
-const subscriptions = new SubscriptionService(db, media, queue, config, () => changed('subscriptions'))
+const push = new PushService(db)
+push.initialize()
+const subscriptions = new SubscriptionService(db, media, queue, config, () => changed('subscriptions'), push)
 const youtubeCookies = new YoutubeCookieService(), localFiles = createLocalFileActions()
 const port = Number(process.env.PORT || 3000), host = process.env.HOST || '0.0.0.0'
+function wakeBackgroundTasks() { queue.wake(); analysis.resumeQueued(); remake.resumeQueued(); publisher.wake() }
 const clientDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../client')
 const browserProxy = httpProxy.createProxyServer({ target: process.env.SVD_BROWSER_VNC || 'http://browser:6080', ws: true })
 browserProxy.on('error', (_error, _request, response) => { if ('writeHead' in response) { response.writeHead(502); response.end('远程浏览器不可用') } })
@@ -50,16 +55,32 @@ browserProxy.on('error', (_error, _request, response) => { if ('writeHead' in re
 function json(response: ServerResponse, status: number, value: unknown) { response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); response.end(JSON.stringify(value)) }
 async function body<T>(request: IncomingMessage): Promise<T> { const chunks: Buffer[] = []; let size = 0; for await (const chunk of request) { size += chunk.length; if (size > 2 * 1024 * 1024) throw Object.assign(new Error('请求内容过大'), { statusCode: 413 }); chunks.push(chunk) } return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as T }
 const mime: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.ico': 'image/x-icon' }
+function constantTimeEqual(actual: string, expected: string) { const actualBytes = Buffer.from(actual), expectedBytes = Buffer.from(expected); return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes) }
 async function staticFile(requestPath: string, response: ServerResponse) { const decoded = decodeURIComponent(requestPath), candidate = path.resolve(clientDir, `.${decoded}`); let target = candidate.startsWith(`${clientDir}${path.sep}`) ? candidate : path.join(clientDir, 'index.html'); try { if (!(await stat(target)).isFile()) target = path.join(clientDir, 'index.html') } catch { target = path.join(clientDir, 'index.html') } response.writeHead(200, { 'content-type': mime[path.extname(target)] || 'application/octet-stream' }); createReadStream(target).pipe(response) }
 async function libraryFiles(ids: unknown) {
   const unique = [...new Set((Array.isArray(ids) ? ids : []).map(value => String(value)))].filter(Boolean)
   return Promise.all(unique.map(id => library.resolvedFile(id)))
 }
-async function downloadFile(id: string, response: ServerResponse) { const job = queue.get(id); if (!job?.outputPath || !['completed', 'skipped'].includes(job.status)) return json(response, 404, { error: '下载文件不存在' }); const [root, file] = await Promise.all([realpath(config.get().outputRoot), realpath(job.outputPath)]); const relative = path.relative(root, file); if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return json(response, 403, { error: '不允许访问该文件' }); const info = await stat(file), encodedName = encodeURIComponent(path.basename(file)); response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': info.size, 'content-disposition': `attachment; filename*=UTF-8''${encodedName}`, 'cache-control': 'private, no-store' }); createReadStream(file).pipe(response) }
+async function downloadFile(id: string, request: IncomingMessage, response: ServerResponse) { const job = queue.get(id); if (!job || !['completed', 'skipped'].includes(job.status)) return json(response, 404, { error: '下载文件不存在' }); if (process.env.SVD_CLOUDFLARE_RUNTIME === '1' && job.assetId) return mediaResponse(job.assetId, request, response, true); if (!job.outputPath) return json(response, 404, { error: '下载文件不存在' }); const [root, file] = await Promise.all([realpath(config.get().outputRoot), realpath(job.outputPath)]); const relative = path.relative(root, file); if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return json(response, 403, { error: '不允许访问该文件' }); const info = await stat(file), encodedName = encodeURIComponent(path.basename(file)); response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': info.size, 'content-disposition': `attachment; filename*=UTF-8''${encodedName}`, 'cache-control': 'private, no-store' }); createReadStream(file).pipe(response) }
+async function mediaResponse(id: string, request: IncomingMessage, response: ServerResponse, attachment: boolean) { const url = await library.downloadUrl(id); if (url) { response.writeHead(302, { location: url, 'cache-control': 'private, no-store' }); response.end(); return }; return library.stream(id, request.headers.range, response, attachment) }
 
 async function api(request: IncomingMessage, response: ServerResponse, url: URL) {
   const pathname = url.pathname
   if (request.method === 'GET' && pathname === '/api/health') return json(response, 200, { ok: true, database: true })
+  if (request.method === 'POST' && pathname === '/api/internal/scheduler/tick') {
+    const expected = process.env.SVD_INTERNAL_SCHEDULER_TOKEN || ''
+    const supplied = String(request.headers.authorization || '').replace(/^Bearer\s+/i, '')
+    if (!expected || !constantTimeEqual(supplied, expected)) return json(response, 401, { error: 'Unauthorized' })
+    wakeBackgroundTasks()
+    return json(response, 200, await subscriptions.runScheduled())
+  }
+  if (request.method === 'POST' && pathname === '/api/internal/jobs/wake') {
+    const expected = process.env.SVD_INTERNAL_SCHEDULER_TOKEN || ''
+    const supplied = String(request.headers.authorization || '').replace(/^Bearer\s+/i, '')
+    if (!expected || !constantTimeEqual(supplied, expected)) return json(response, 401, { error: 'Unauthorized' })
+    wakeBackgroundTasks()
+    return json(response, 202, { accepted: true })
+  }
   if (request.method === 'POST' && pathname === '/api/auth/login') { const value = await body<{ password: string }>(request); return json(response, 200, await auth.login(String(value.password || ''), request.socket.remoteAddress || 'unknown', response)) }
   if (request.method === 'GET' && pathname === '/api/auth/session') { const session = auth.session(request); return json(response, 200, session ? { authenticated: true, csrfToken: session.csrf_token } : { authenticated: false }) }
   if (request.method === 'POST' && pathname === '/api/auth/logout') { auth.require(request, true); auth.logout(request, response); return json(response, 200, { authenticated: false }) }
@@ -75,7 +96,7 @@ async function api(request: IncomingMessage, response: ServerResponse, url: URL)
   if (request.method === 'POST' && pathname === '/api/creator/scan') return json(response, 200, await media.scan(await body<ScanRequest>(request), event => publish({ type: 'creator', event })))
   if (request.method === 'POST' && pathname === '/api/creator/stop') { media.stop(); return json(response, 200, null) }
   if (request.method === 'GET' && pathname === '/api/destination') return json(response, 200, config.get().outputRoot)
-  const oldFile = request.method === 'GET' && pathname.match(/^\/api\/downloads\/([0-9a-f-]+)\/file$/); if (oldFile) return downloadFile(oldFile[1], response)
+  const oldFile = request.method === 'GET' && pathname.match(/^\/api\/downloads\/([0-9a-f-]+)\/file$/); if (oldFile) return downloadFile(oldFile[1], request, response)
   if (request.method === 'GET' && pathname === '/api/downloads/jobs') return json(response, 200, queue.snapshot())
   if (request.method === 'POST' && pathname === '/api/downloads/start') {
     const value = await body<StartRequest>(request); value.options.outputRoot = config.get().outputRoot
@@ -85,17 +106,19 @@ async function api(request: IncomingMessage, response: ServerResponse, url: URL)
   if (request.method === 'POST' && pathname === '/api/downloads/cancel') { queue.cancel((await body<{ id?: string }>(request)).id); return json(response, 200, null) }
   if (request.method === 'POST' && pathname === '/api/downloads/retry') { const value = await body<{ id?: string }>(request); if (value.id) { queue.retry(String(value.id)); return json(response, 200, { count: 1 }) } return json(response, 200, { count: queue.retryFailed() }) }
   if (request.method === 'GET' && pathname === '/api/library') return json(response, 200, db.assets())
-  if (request.method === 'GET' && pathname === '/api/library/local-actions') return json(response, 200, await localFiles.capabilities())
-  if (request.method === 'POST' && pathname === '/api/library/reveal') { const files = await libraryFiles((await body<{ ids?: string[] }>(request)).ids); await localFiles.reveal(files); db.audit('library.reveal', { count: files.length }); return json(response, 200, { count: files.length }) }
-  if (request.method === 'POST' && pathname === '/api/library/airdrop') { const files = await libraryFiles((await body<{ ids?: string[] }>(request)).ids); await localFiles.airdrop(files); db.audit('library.airdrop', { count: files.length }); return json(response, 202, { count: files.length }) }
+  if (request.method === 'GET' && pathname === '/api/library/local-actions') { const capabilities = await localFiles.capabilities(); return json(response, 200, process.env.SVD_CLOUDFLARE_RUNTIME === '1' ? { reveal: false, airdrop: false, upload: true } : { ...capabilities, upload: false }) }
+  if (request.method === 'POST' && pathname === '/api/library/reveal') { if (process.env.SVD_CLOUDFLARE_RUNTIME === '1') throw Object.assign(new Error('打开宿主机目录仅适用于服务器或本地部署'), { statusCode: 409 }); const files = await libraryFiles((await body<{ ids?: string[] }>(request)).ids); await localFiles.reveal(files); db.audit('library.reveal', { count: files.length }); return json(response, 200, { count: files.length }) }
+  if (request.method === 'POST' && pathname === '/api/library/airdrop') { if (process.env.SVD_CLOUDFLARE_RUNTIME === '1') throw Object.assign(new Error('AirDrop 仅适用于本地部署'), { statusCode: 409 }); const files = await libraryFiles((await body<{ ids?: string[] }>(request)).ids); await localFiles.airdrop(files); db.audit('library.airdrop', { count: files.length }); return json(response, 202, { count: files.length }) }
   if (request.method === 'POST' && pathname === '/api/library/import') return json(response, 200, await library.importDirectory(String((await body<{ directory: string }>(request)).directory || '')))
+  if (request.method === 'POST' && pathname === '/api/library/upload-ticket') { const value = await body<{ filename?: string }>(request); return json(response, 201, await library.createUploadTicket(String(value.filename || ''))) }
+  if (request.method === 'POST' && pathname === '/api/library/upload-complete') { const value = await body<{ id?: string }>(request); const asset = await library.completeUpload(String(value.id || '')); changed('library'); return json(response, 201, asset) }
   if (request.method === 'POST' && pathname === '/api/library/delete') { const value = await body<{ ids: string[]; deleteFiles?: boolean }>(request); const result = await library.deleteAssets(Array.isArray(value.ids) ? value.ids : [], Boolean(value.deleteFiles)); changed('library'); return json(response, 200, result) }
   const stateMatch = request.method === 'POST' && pathname.match(/^\/api\/library\/([^/]+)\/state$/)
   if (stateMatch) { const value = await body<{ state: 'processed' | 'unprocessed' }>(request); if (!['processed', 'unprocessed'].includes(value.state)) throw new Error('处理状态无效'); return json(response, 200, db.setAssetState(stateMatch[1], value.state)) }
   const thumbnailMatch = request.method === 'GET' && pathname.match(/^\/api\/library\/([^/]+)\/thumbnail$/); if (thumbnailMatch) return library.thumbnail(thumbnailMatch[1], response)
   const hashMatch = request.method === 'GET' && pathname.match(/^\/api\/library\/([^/]+)\/hash$/); if (hashMatch) return json(response, 200, await library.fileHash(hashMatch[1]))
   const metadataMatch = request.method === 'GET' && pathname.match(/^\/api\/library\/([^/]+)\/metadata$/); if (metadataMatch) return json(response, 200, await library.metadata(metadataMatch[1]))
-  const mediaMatch = request.method === 'GET' && pathname.match(/^\/api\/library\/([^/]+)\/(media|file)$/); if (mediaMatch) return library.stream(mediaMatch[1], request.headers.range, response, mediaMatch[2] === 'file')
+  const mediaMatch = request.method === 'GET' && pathname.match(/^\/api\/library\/([^/]+)\/(media|file)$/); if (mediaMatch) return mediaResponse(mediaMatch[1], request, response, mediaMatch[2] === 'file')
   if (request.method === 'GET' && pathname === '/api/hypit/config') return json(response, 200, await hypitCli.status())
   if (request.method === 'PUT' && pathname === '/api/hypit/config') {
     const value = await body<{ baseUrl?: string; apiKey?: string }>(request)
@@ -171,7 +194,7 @@ async function api(request: IncomingMessage, response: ServerResponse, url: URL)
   }
   if (request.method === 'GET' && pathname === '/api/subscriptions/schedule') return json(response, 200, subscriptions.schedule())
   if (request.method === 'PATCH' && pathname === '/api/subscriptions/schedule') {
-    const value = await body<{ enabled?: boolean; hour?: number; minute?: number }>(request)
+    const value = await body<{ enabled?: boolean; hour?: number; minute?: number; timeZone?: string }>(request)
     return json(response, 200, subscriptions.updateSchedule(value))
   }
   if (request.method === 'POST' && pathname === '/api/subscriptions/poll') return json(response, 202, await subscriptions.pollNow())
@@ -181,6 +204,14 @@ async function api(request: IncomingMessage, response: ServerResponse, url: URL)
     return json(response, 200, subscriptions.markRead(Array.isArray(value.ids) ? value.ids : undefined, Boolean(value.all)))
   }
   if (request.method === 'GET' && pathname === '/api/subscriptions/status') return json(response, 200, subscriptions.status())
+  if (request.method === 'GET' && pathname === '/api/push/public-key') return json(response, 200, { publicKey: push.publicKey() })
+  if (request.method === 'GET' && pathname === '/api/push/devices') return json(response, 200, await push.devices())
+  if (request.method === 'POST' && pathname === '/api/push/devices') {
+    const value = await body<import('../shared/types').PushSubscriptionInput>(request)
+    return json(response, 201, { id: await push.saveDevice(value) })
+  }
+  const pushDevice = request.method === 'DELETE' && pathname.match(/^\/api\/push\/devices\/([^/]+)$/)
+  if (pushDevice) return json(response, 200, { removed: await push.removeDevice(pushDevice[1]) })
   const subscriptionPatch = request.method === 'PATCH' && pathname.match(/^\/api\/subscriptions\/([^/]+)$/)
   if (subscriptionPatch) {
     const value = await body<{ autoDownload?: boolean; enabled?: boolean; displayName?: string }>(request)
@@ -192,6 +223,7 @@ async function api(request: IncomingMessage, response: ServerResponse, url: URL)
 }
 
 await config.load(); await mkdir(config.get().outputRoot, { recursive: true }); await auth.initialize(); await codex.initialize(); await hypitConfig.load(); await migrateLegacy(db, library)
+if (process.env.SVD_CLOUDFLARE_RUNTIME === '1') wakeBackgroundTasks()
 const server = createServer(async (request, response) => {
   try { const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`); if (url.pathname.startsWith('/remote-browser/')) { auth.require(request); request.url = `${url.pathname.slice('/remote-browser'.length) || '/'}${url.search}`; return browserProxy.web(request, response) } if (url.pathname.startsWith('/api/')) await api(request, response, url); else await staticFile(url.pathname === '/' ? '/index.html' : url.pathname, response) }
   catch (error) { json(response, (error as { statusCode?: number }).statusCode || 500, { error: error instanceof Error ? error.message : String(error) }) }

@@ -104,7 +104,7 @@ export interface MediaAsset {
 
 export interface MediaFileHash { algorithm: 'sha256'; hash: string; size: number; modifiedAt: string }
 export interface MediaFileMetadata { size: number; duration?: number; modifiedAt: string }
-export interface LocalFileActionsStatus { reveal: boolean; airdrop: boolean }
+export interface LocalFileActionsStatus { reveal: boolean; airdrop: boolean; upload: boolean }
 
 export interface AnalysisJob {
   id: string
@@ -297,9 +297,23 @@ export interface SubscriptionSchedule {
   enabled: boolean
   hour: number
   minute: number
+  timeZone: string
   lastPollAt?: string
   nextPollAt?: string
   polling: boolean
+}
+
+export interface PushDevice {
+  id: string
+  label: string
+  createdAt: string
+  lastSentAt?: string
+}
+
+export interface PushSubscriptionInput {
+  endpoint: string
+  keys: { p256dh: string; auth: string }
+  label?: string
 }
 
 export interface SubscriptionStatus {

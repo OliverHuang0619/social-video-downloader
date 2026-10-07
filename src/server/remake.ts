@@ -14,6 +14,15 @@ export class RemakeService {
   private root = path.join(process.env.SVD_CONFIG_DIR || '/config', 'hypit-projects')
   private skillFile = process.env.SVD_HYPIT_SKILL_FILE || '/app/skills/hypit/SKILL.md'
   constructor(private db: AppDatabase, private library: LibraryService, private codex: CodexService, private hypit: HypitConfigStore, private changed: () => void) {}
+  resumeQueued() {
+    if (this.active) return false
+    const job = this.db.remakes().find(value => value.status === 'queued')
+    if (!job) return false
+    this.active = { id: job.id }
+    void this.run(job)
+    this.changed()
+    return true
+  }
 
   list() { return this.db.remakes() }
   start(assetIds: string[], direction: string, mode: RemakeJob['mode'], budget?: string, reusableProjectDir?: string) {
@@ -69,7 +78,10 @@ export class RemakeService {
   }
   private async run(job: RemakeJob) {
     try {
-      const assets = job.assetIds.map(id => this.db.asset(id)!)
+      const assets = await Promise.all(job.assetIds.map(async id => {
+        const asset = this.db.asset(id)!
+        return { ...asset, file: await this.library.resolvedFile(id) }
+      }))
       await mkdir(path.join(job.projectDir, 'productions'), { recursive: true })
       await writeFile(path.join(job.projectDir, 'package.json'), JSON.stringify({ name: `media-remake-${job.id.slice(0, 8)}`, version: '0.0.0', private: true, type: 'module' }, null, 2))
       await writeFile(path.join(job.projectDir, 'REQUEST.json'), JSON.stringify({ direction: job.direction, mode: job.mode, budget: job.budget, references: assets.map(asset => ({ id: asset.id, file: asset.file, title: asset.analysis?.title || asset.filename, analysis: asset.analysis })) }, null, 2))

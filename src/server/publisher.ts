@@ -53,11 +53,12 @@ export class PublisherService {
   private browserMode: BrowserStatus['mode'] = process.env.SVD_BROWSER_MODE === 'host' ? 'host' : 'container'
   private browserUrl = process.env.SVD_BROWSER_CDP || 'http://browser:9222'
   private browserToken = loadBrowserToken(this.browserMode)
-  constructor(private db: AppDatabase, private changed: () => void) {
+  constructor(private db: AppDatabase, private changed: () => void, private resolveMediaFile?: (assetId: string) => Promise<string>) {
     void this.resume()
     this.safetyTimer = setInterval(() => { void this.pump() }, 15_000)
     this.safetyTimer.unref?.()
   }
+  wake() { void this.pump() }
   async status(): Promise<BrowserStatus> {
     let ready = false
     try { const response = await fetch(`${this.browserUrl}/json/version`, { headers: this.browserToken ? { authorization: `Bearer ${this.browserToken}` } : undefined, signal: AbortSignal.timeout(2500) }); ready = response.ok } catch { /* browser offline */ }
@@ -266,12 +267,12 @@ export class PublisherService {
   }
   private async runJob(job: PublishJob) {
     if (this.cancelledBatches.has(job.batchId)) return false
-    const asset = this.db.asset(job.assetId)!; const payloadPath = path.join(this.tempDir, `${job.id}.json`)
+    const asset = this.db.asset(job.assetId)!, mediaFile = this.resolveMediaFile ? await this.resolveMediaFile(asset.id) : asset.file; const payloadPath = path.join(this.tempDir, `${job.id}.json`)
     const douyin = isDouyinPublishPlatform(job.platform)
     const cover = path.join(process.env.SVD_CONFIG_DIR || '/config', 'thumbnails', `${asset.id}.jpg`)
     const payload = douyin
-      ? { jobId: job.id, file: asset.file, title: job.title, topics: job.topics, publishAt: job.publishAt, aigc: job.aigc, waitForCovers: job.waitForCovers, artifactDir: this.artifactDir }
-      : { jobId: job.id, platform: job.platform, injectUrl: multipostPlatform(job.platform)?.injectUrl, injectorHost: multipostPlatform(job.platform)?.injectorHost, file: asset.file, title: job.title, shortTitle: job.title, topics: job.topics, summary: job.summary ?? asset.analysis?.summary ?? '', publishAt: job.publishAt, coverFile: existsSync(cover) ? cover : undefined, artifactDir: this.artifactDir }
+      ? { jobId: job.id, file: mediaFile, title: job.title, topics: job.topics, publishAt: job.publishAt, aigc: job.aigc, waitForCovers: job.waitForCovers, artifactDir: this.artifactDir }
+      : { jobId: job.id, platform: job.platform, injectUrl: multipostPlatform(job.platform)?.injectUrl, injectorHost: multipostPlatform(job.platform)?.injectorHost, file: mediaFile, title: job.title, shortTitle: job.title, topics: job.topics, summary: job.summary ?? asset.analysis?.summary ?? '', publishAt: job.publishAt, coverFile: existsSync(cover) ? cover : undefined, artifactDir: this.artifactDir }
     await writeFile(payloadPath, JSON.stringify(payload))
     let succeeded = false
     await this.execute(douyin ? this.douyinScript : this.multipostScript, ['publish', payloadPath], event => {

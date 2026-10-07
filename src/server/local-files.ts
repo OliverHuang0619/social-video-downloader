@@ -136,18 +136,18 @@ export class LocalFileActions {
 }
 
 function nativeCapabilities(platform: NodeJS.Platform): LocalFileActionsStatus {
-  return { reveal: platform === 'darwin' || platform === 'linux' || platform === 'win32', airdrop: platform === 'darwin' }
+  return { reveal: platform === 'darwin' || platform === 'linux' || platform === 'win32', airdrop: platform === 'darwin', upload: false }
 }
 
 async function hostCapabilities(host: HostClient | undefined): Promise<LocalFileActionsStatus> {
-  if (!host) return { reveal: false, airdrop: false }
+  if (!host) return { reveal: false, airdrop: false, upload: false }
   try {
     const response = await host.fetch(new URL('/capabilities', host.endpoint), { headers: { authorization: `Bearer ${host.token}` }, signal: AbortSignal.timeout(1500) })
-    if (!response.ok) return { reveal: false, airdrop: false }
+    if (!response.ok) return { reveal: false, airdrop: false, upload: false }
     const value = await response.json() as Partial<LocalFileActionsStatus>
-    return { reveal: Boolean(value.reveal), airdrop: Boolean(value.airdrop) }
+    return { reveal: Boolean(value.reveal), airdrop: Boolean(value.airdrop), upload: false }
   } catch {
-    return { reveal: false, airdrop: false }
+    return { reveal: false, airdrop: false, upload: false }
   }
 }
 

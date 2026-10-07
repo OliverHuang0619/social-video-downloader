@@ -11,11 +11,13 @@ import type {
   SubscriptionStatus,
 } from '../shared/types'
 import type { AppDatabase } from './db'
+import type { PushService } from './push'
 
 const SHALLOW_LIMIT = 30
 const META_HOUR = 'subscription_poll_hour'
 const META_MINUTE = 'subscription_poll_minute'
 const META_ENABLED = 'subscription_poll_enabled'
+const META_TIMEZONE = 'subscription_poll_timezone'
 const META_LAST = 'subscription_last_poll_at'
 const META_NEXT = 'subscription_next_poll_at'
 
@@ -35,11 +37,37 @@ function displayNameFromItems(items: MediaItem[], url: string) {
   }
 }
 
-function nextPollDate(hour: number, minute: number, from = new Date()) {
-  const next = new Date(from)
-  next.setSeconds(0, 0)
-  next.setHours(hour, minute, 0, 0)
-  if (next.getTime() <= from.getTime()) next.setDate(next.getDate() + 1)
+function zonedParts(date: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(date)
+  const values = Object.fromEntries(parts.map(part => [part.type, Number(part.value)]))
+  return { year: values.year, month: values.month, day: values.day, hour: values.hour, minute: values.minute, second: values.second }
+}
+
+function zonedDateTime(year: number, month: number, day: number, hour: number, minute: number, timeZone: string) {
+  const target = Date.UTC(year, month - 1, day, hour, minute)
+  let timestamp = target
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const parts = zonedParts(new Date(timestamp), timeZone)
+    const actual = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second)
+    const delta = target - actual
+    if (!delta) break
+    timestamp += delta
+  }
+  return new Date(timestamp)
+}
+
+export function nextSubscriptionPollDate(hour: number, minute: number, timeZone: string, from = new Date()) {
+  const local = zonedParts(from, timeZone)
+  let year = local.year, month = local.month, day = local.day
+  let next = zonedDateTime(year, month, day, hour, minute, timeZone)
+  if (next.getTime() <= from.getTime()) {
+    const tomorrow = new Date(Date.UTC(year, month - 1, day + 1))
+    year = tomorrow.getUTCFullYear(); month = tomorrow.getUTCMonth() + 1; day = tomorrow.getUTCDate()
+    next = zonedDateTime(year, month, day, hour, minute, timeZone)
+  }
   return next
 }
 
@@ -55,6 +83,7 @@ export class SubscriptionService {
     private queue: DownloadQueue,
     private config: ConfigStore,
     private onChange: () => void,
+    private push?: Pick<PushService, 'notifyNewSubscriptionVideo'>,
   ) {
     this.ensureScheduleDefaults()
     this.scheduleWake(this.msUntilNextPoll())
@@ -72,13 +101,14 @@ export class SubscriptionService {
       enabled: this.db.meta(META_ENABLED) !== '0',
       hour: Number(this.db.meta(META_HOUR) ?? 0),
       minute: Number(this.db.meta(META_MINUTE) ?? 0),
+      timeZone: this.db.meta(META_TIMEZONE) || 'Asia/Shanghai',
       lastPollAt: this.db.meta(META_LAST) || undefined,
       nextPollAt: this.db.meta(META_NEXT) || undefined,
       polling: this.polling,
     }
   }
 
-  updateSchedule(value: { enabled?: boolean; hour?: number; minute?: number }) {
+  updateSchedule(value: { enabled?: boolean; hour?: number; minute?: number; timeZone?: string }) {
     if (value.enabled !== undefined) this.db.setMeta(META_ENABLED, value.enabled ? '1' : '0')
     if (value.hour !== undefined) {
       const hour = Math.max(0, Math.min(23, Math.floor(value.hour)))
@@ -87,6 +117,12 @@ export class SubscriptionService {
     if (value.minute !== undefined) {
       const minute = Math.max(0, Math.min(59, Math.floor(value.minute)))
       this.db.setMeta(META_MINUTE, String(minute))
+    }
+    if (value.timeZone !== undefined) {
+      const timeZone = String(value.timeZone).trim()
+      try { new Intl.DateTimeFormat('en-US', { timeZone }).format() }
+      catch { throw Object.assign(new Error('时区必须是有效的 IANA 时区名称'), { statusCode: 400 }) }
+      this.db.setMeta(META_TIMEZONE, timeZone)
     }
     this.refreshNextPollMeta()
     this.scheduleWake(this.msUntilNextPoll())
@@ -140,10 +176,19 @@ export class SubscriptionService {
     return this.status()
   }
 
+  async runScheduled() {
+    await this.tick()
+    return this.status()
+  }
+
   private ensureScheduleDefaults() {
     if (this.db.meta(META_HOUR) === undefined) this.db.setMeta(META_HOUR, '0')
     if (this.db.meta(META_MINUTE) === undefined) this.db.setMeta(META_MINUTE, '0')
     if (this.db.meta(META_ENABLED) === undefined) this.db.setMeta(META_ENABLED, '1')
+    if (this.db.meta(META_TIMEZONE) === undefined) this.db.setMeta(META_TIMEZONE, 'Asia/Shanghai')
+    // This is a durable lease observed by the Cloudflare Container DO while a
+    // long subscription scan is active; a fresh process clears a stale lease.
+    this.db.setMeta('subscription_polling', '0')
     this.refreshNextPollMeta()
   }
 
@@ -153,13 +198,13 @@ export class SubscriptionService {
       this.db.setMeta(META_NEXT, '')
       return
     }
-    this.db.setMeta(META_NEXT, nextPollDate(schedule.hour, schedule.minute).toISOString())
+    this.db.setMeta(META_NEXT, nextSubscriptionPollDate(schedule.hour, schedule.minute, schedule.timeZone).toISOString())
   }
 
   private msUntilNextPoll() {
     const schedule = this.schedule()
     if (!schedule.enabled) return 60_000
-    return Math.max(50, nextPollDate(schedule.hour, schedule.minute).getTime() - Date.now())
+    return Math.max(50, nextSubscriptionPollDate(schedule.hour, schedule.minute, schedule.timeZone).getTime() - Date.now())
   }
 
   private scheduleWake(delayMs: number) {
@@ -177,11 +222,12 @@ export class SubscriptionService {
       return
     }
     if (this.polling) {
-      this.pollQueued = true
+      if (force) this.pollQueued = true
       return
     }
     this.polling = true
     this.pollQueued = false
+    this.db.setMeta('subscription_polling', '1')
     this.onChange()
     try {
       await this.pollAll()
@@ -189,6 +235,7 @@ export class SubscriptionService {
       this.refreshNextPollMeta()
     } finally {
       this.polling = false
+      this.db.setMeta('subscription_polling', '0')
       this.onChange()
       if (this.pollQueued) {
         this.pollQueued = false
@@ -224,6 +271,10 @@ export class SubscriptionService {
               downloadJobId,
             })
             created.push(notification)
+          }
+          if (created.length && this.push) {
+            void Promise.all(created.map(notification => this.push!.notifyNewSubscriptionVideo(notification)))
+              .catch(error => console.warn('Web Push delivery failed:', error instanceof Error ? error.message : String(error)))
           }
           if (downloadItems.length) {
             const jobs = await this.queue.start({

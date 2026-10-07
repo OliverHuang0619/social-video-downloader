@@ -9,6 +9,7 @@
 - 手动批量启动 Codex 分析，生成中文标题、英文标题、话题、摘要和证据置信度
 - 对媒体库所选视频启动 Hypit 原创重新制作：先产出可编辑工程，或在明确预算授权后生成成片并自动回库
 - 抖音扫码登录、单条立即/定时发布、批量平台排期和本地定时发布
+- 订阅新视频站内通知、页面打开时的系统通知，以及按浏览器设备启用的离线 Web Push
 - 站内受保护的 noVNC 远程浏览器，用于扫码、验证码和人工检查
 - SQLite 持久任务、发布历史和旧 `*-catalog-report` 自动导入
 - 单管理员登录、CSRF、防暴力登录和受限文件访问
@@ -26,6 +27,29 @@
 ```bash
 ./deploy.sh redeploy
 ```
+
+## 部署冒烟检查
+
+运行 `npm run smoke:deployments` 可在隔离临时目录中构建并启动本地与 Docker 运行模式，检查健康接口、登录、订阅时区配置、Push 设备注册/撤销，以及进程重启后的配置和设备持久化。临时数据会在检查结束后清理。
+
+## Cloudflare 部署（实验性）
+
+Cloudflare 配置位于 `cloudflare/`，Worker 提供静态前端、订阅巡检 Cron/Queue 入口和容器代理；Cron 直接检查 D1 的下次巡检时间和到期任务，只在需要时投递队列，避免每分钟唤醒容器。运行中的下载、分析、制作、发布和订阅扫描会通过 Durable Object 活动租约续期，空闲后容器仍可休眠。容器镜像同时包含 Chromium/noVNC。需要 Cloudflare Workers Paid、已登录 Wrangler、Docker，以及可用的 Cloudflare Containers 账户权限。
+
+先登录 Wrangler，然后运行资源初始化命令。脚本会按配置名称复用或创建 D1、R2 bucket 和 Queue，并自动把 D1 UUID 写入 Wrangler 配置。在 Cloudflare R2 中另建具备该 bucket 对象读写权限的 S3 API Token；初始化脚本会提示输入 Account ID 与这组凭据，用于生成浏览器直传/直下的一小时签名 URL：
+
+```bash
+npx wrangler login
+npm run cloudflare:resources
+```
+
+资源创建后，运行初始化脚本并设置至少 12 字符的管理员密码；脚本会提示输入 R2 Account ID 与 S3 API 凭据，并自动生成其余密钥：
+
+```bash
+./cloudflare/set-secrets.sh
+```
+
+脚本会在 `cloudflare/.secrets.json` 生成权限为 `0600`、且已加入 Git 忽略的临时文件。首次运行 `npm run cloudflare:deploy` 时，Wrangler 会随 Worker 首次部署一起上传 Secrets；成功后临时文件会自动删除。后续部署会核对 Worker 已有的 Secret 名称并保留云端值。部署脚本先检查 Wrangler 登录、D1 ID、Docker 和必需 Secrets，再构建容器、应用 D1 迁移、配置 R2 CORS 并发布，避免在前置配置缺失时先动远程数据库。Cloudflare 以全新安装启动，不会导入 Docker/本地数据。Cloudflare 容器磁盘仅作临时工作空间；业务表和任务状态使用 D1，视频写入 R2，浏览器上传、播放和下载使用 R2 签名 URL，Chromium 登录资料与 `/config` 中非 SQLite 文件会加密后备份至 R2。D1 迁移按版本向前应用；不要在生产环境手动删除或回滚迁移记录，应新增修复迁移。完成容器重启、队列重试与空账号首次部署的 Cloudflare 端到端验证前，此配置仍标记为实验性。Docker 服务器与本地部署仍使用上面的既有命令。
 
 ### 本地电脑浏览器模式
 
@@ -100,6 +124,8 @@ BIND_ADDRESS=0.0.0.0 docker compose up -d
 4. 需要原创改编时点击“Hypit 重新制作”，填写创意方向。默认只建立原创方案与可编辑工程，不产生付费生成；生成成片必须明确填写预算或免费额度范围，并先在设置页配置 Hypit。
 5. 审核标题、话题和摘要，选择单个或多个视频发布到抖音。
 6. 在“任务”页查看分析、Hypit 制作和发布进度。
+
+订阅巡检时区可在“设置 → 订阅巡检”配置 IANA 名称，默认 `Asia/Shanghai`。首次从设置页启用 Web Push 时，浏览器会请求通知权限；服务器公网访问需要 HTTPS，本地访问 `localhost` 可使用浏览器 Push API。每台设备可单独撤销。VAPID 密钥会自动生成并持久保存；也可通过 `SVD_VAPID_PUBLIC_KEY` 和 `SVD_VAPID_PRIVATE_KEY` 同时提供外部托管密钥。
 
 Docker 镜像内置 Hypit CLI 与技能。Hypit 工程持久保存在 `config/hypit-projects`，成片写入 `downloads/remakes` 并自动进入媒体库。设置页「Hypit 生成服务」可检查/安装 Hypit CLI（缺失时通过 npm 安装与镜像同版本的 `@hypit/hypit`），并配置 `HYPIT_BASE_URL` 与 `HYPIT_API_KEY`（落盘于 `config/hypit.json`）；新建重新制作任务会自动写入工程 Runtime，并把变量注入任务进程。安装 CLI 本身不附带模型账号或额度。本地开发若技能不在默认容器路径，可用 `SVD_HYPIT_SKILL_FILE=/绝对路径/SKILL.md` 指定。
 
