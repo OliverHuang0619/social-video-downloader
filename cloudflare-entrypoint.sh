@@ -75,21 +75,8 @@ gosu node chromium \
 gosu node x11vnc -display :99 -forever -shared -nopw -rfbport 5900 &
 websockify --web=/usr/share/novnc 6080 127.0.0.1:5900 &
 
-wait_for_http() {
-  url=$1
-  label=$2
-  attempt=0
-  until curl --silent --fail --max-time 2 "$url" >/dev/null 2>&1; do
-    attempt=$((attempt + 1))
-    if [ "$attempt" -ge 120 ]; then
-      echo "Timed out waiting for ${label}" >&2
-      exit 1
-    fi
-    sleep 1
-  done
-}
-
-wait_for_http http://127.0.0.1:9222/json/version 'Chromium DevTools'
-wait_for_http http://127.0.0.1:6080/vnc.html 'noVNC'
-
+# Do not block the application port on browser startup. Cloudflare waits for
+# the configured container port before routing traffic; making Chromium/noVNC
+# readiness a prerequisite can cause cold starts to be terminated before the
+# API (including login) ever becomes available.
 exec gosu node node /app/dist/server/index.js

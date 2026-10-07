@@ -8,7 +8,7 @@ SECRETS_FILE="$ROOT/cloudflare/.secrets.json"
 cd "$ROOT"
 
 if [ -e "$SECRETS_FILE" ]; then
-  echo "已有待部署 Secrets 文件：$SECRETS_FILE；请先部署或安全删除后再生成。" >&2
+  echo "已有待部署 Secrets 文件：${SECRETS_FILE}；请先部署或安全删除后再生成。" >&2
   exit 1
 fi
 

@@ -48,7 +48,16 @@ function d1Databases() {
 }
 
 function r2Buckets() {
-  const output = run(['r2', 'bucket', 'list']).replace(/\u001b\[[0-9;]*m/g, '')
+  let output
+  try {
+    output = run(['r2', 'bucket', 'list'])
+  } catch (error) {
+    if (/Please enable R2 through the Cloudflare Dashboard|\[code:\s*10042\]/i.test(error.message)) {
+      throw new Error('此 Cloudflare 账户尚未开通 R2（API code 10042）。请在 Dashboard 打开 Storage & databases → R2 → Overview，完成 R2 checkout/订阅开通，然后重新运行 npm run cloudflare:resources。D1 已创建且 database_id 已保存；重跑会复用它。官方步骤：https://developers.cloudflare.com/r2/get-started/')
+    }
+    throw error
+  }
+  output = output.replace(/\u001b\[[0-9;]*m/g, '')
   return [...output.matchAll(/(?:^|\n)\s*name:\s*([^\s]+)/g)].map(match => match[1])
 }
 
@@ -79,27 +88,32 @@ function createIfMissing(name, list, createArgs, label) {
   }
 }
 
-let config = readConfig()
-const databaseBinding = config.d1_databases?.find(binding => binding.binding === 'DB')
-if (!databaseBinding) throw new Error('Wrangler 配置缺少 DB D1 binding。')
-let database = d1Databases().find(item => item.name === databaseBinding.database_name)
-if (!database) {
-  console.log(`创建 D1 ${databaseBinding.database_name}...`)
-  run(['d1', 'create', databaseBinding.database_name, '--binding', 'DB', '--update-config'])
+try {
+  let config = readConfig()
+  const databaseBinding = config.d1_databases?.find(binding => binding.binding === 'DB')
+  if (!databaseBinding) throw new Error('Wrangler 配置缺少 DB D1 binding。')
+  let database = d1Databases().find(item => item.name === databaseBinding.database_name)
+  if (!database) {
+    console.log(`创建 D1 ${databaseBinding.database_name}...`)
+    run(['d1', 'create', databaseBinding.database_name, '--binding', 'DB', '--update-config'])
+    config = readConfig()
+    database = d1Databases().find(item => item.name === databaseBinding.database_name)
+  }
+  if (!database?.uuid) throw new Error(`D1 数据库 ${databaseBinding.database_name} 已创建，但 Wrangler 没有返回它的 UUID。`)
+  patchDatabaseId(database.uuid)
+  console.log(`D1 ${databaseBinding.database_name} 已就绪，database_id 已写回 Wrangler 配置。`)
+
   config = readConfig()
-  database = d1Databases().find(item => item.name === databaseBinding.database_name)
+  const mediaBinding = config.r2_buckets?.find(binding => binding.binding === 'MEDIA')
+  if (!mediaBinding) throw new Error('Wrangler 配置缺少 MEDIA R2 binding。')
+  createIfMissing(mediaBinding.bucket_name, r2Buckets, ['r2', 'bucket', 'create', mediaBinding.bucket_name, '--binding', 'MEDIA', '--update-config'], 'R2 bucket')
+
+  const queueBinding = config.queues?.producers?.find(binding => binding.binding === 'JOBS')
+  if (!queueBinding) throw new Error('Wrangler 配置缺少 JOBS Queue producer。')
+  createIfMissing(queueBinding.queue, queueNames, ['queues', 'create', queueBinding.queue], 'Queue')
+
+  console.log('D1、R2 和 Queue 资源已就绪。下一步运行 ./cloudflare/set-secrets.sh，再运行 npm run cloudflare:deploy。')
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error))
+  process.exitCode = 1
 }
-if (!database?.uuid) throw new Error(`D1 数据库 ${databaseBinding.database_name} 已创建，但 Wrangler 没有返回它的 UUID。`)
-patchDatabaseId(database.uuid)
-console.log(`D1 ${databaseBinding.database_name} 已就绪，database_id 已写回 Wrangler 配置。`)
-
-config = readConfig()
-const mediaBinding = config.r2_buckets?.find(binding => binding.binding === 'MEDIA')
-if (!mediaBinding) throw new Error('Wrangler 配置缺少 MEDIA R2 binding。')
-createIfMissing(mediaBinding.bucket_name, r2Buckets, ['r2', 'bucket', 'create', mediaBinding.bucket_name, '--binding', 'MEDIA', '--update-config'], 'R2 bucket')
-
-const queueBinding = config.queues?.producers?.find(binding => binding.binding === 'JOBS')
-if (!queueBinding) throw new Error('Wrangler 配置缺少 JOBS Queue producer。')
-createIfMissing(queueBinding.queue, queueNames, ['queues', 'create', queueBinding.queue], 'Queue')
-
-console.log('D1、R2 和 Queue 资源已就绪。下一步运行 ./cloudflare/set-secrets.sh，再运行 npm run cloudflare:deploy。')

@@ -191,10 +191,14 @@ export class WorkbenchContainer extends Container<Env> {
     }
   }
 
-  static outboundByHost = {
-    'svw.d1.internal': (request: Request, rawEnv: unknown) => databaseBinding(request, rawEnv as Env),
-    'svw.r2.internal': (request: Request, rawEnv: unknown, context: OutboundHandlerContext) => mediaBinding(request, rawEnv as Env, context),
-  }
+}
+
+// ContainerProxy reads these handlers from the @cloudflare/containers
+// registry. Assign after the class declaration so the inherited static setter
+// registers them (a subclass static field would shadow the setter).
+WorkbenchContainer.outboundByHost = {
+  'svw.d1.internal': (request: Request, rawEnv: unknown) => databaseBinding(request, rawEnv as Env),
+  'svw.r2.internal': (request: Request, rawEnv: unknown, context: OutboundHandlerContext) => mediaBinding(request, rawEnv as Env, context),
 }
 
 export { ContainerProxy }
