@@ -236,7 +236,9 @@ export interface CodexStatus {
   loginUrl?: string
   loginCode?: string
 }
-export interface BrowserStatus { ready: boolean; mode: 'container' | 'host'; loginStatus: 'unknown' | 'ready' | 'needs_login' | 'needs_attention'; message: string; remoteUrl: string; manageUrl: string }
+export type PublishPlatformAuthState = 'not_configured' | 'pending' | 'authorized' | 'needs_login' | 'unknown'
+export interface PublishPlatformAuth { status: PublishPlatformAuthState; updatedAt?: string; message: string }
+export interface BrowserStatus { ready: boolean; mode: 'container' | 'host'; loginStatus: 'unknown' | 'ready' | 'needs_login' | 'needs_attention'; message: string; remoteUrl: string; manageUrl: string; platformAuth: Record<string, PublishPlatformAuth> }
 export type CookiePlatform = 'youtube' | 'instagram'
 export interface PlatformCookieStatus { status: 'idle' | 'opening' | 'waiting_login' | 'saving' | 'ready' | 'error'; running: boolean; message: string; cookieCount?: number; updatedAt?: string }
 export interface CookieManagerStatus { platforms: Record<CookiePlatform, PlatformCookieStatus>; runningPlatform?: CookiePlatform }

@@ -23,3 +23,18 @@ export function classifyPublishOutcome({ url = '', body = '', logs = [], schedul
   if (SUCCESS.some(text => haystack.includes(text.toLowerCase()))) return { event: scheduled ? 'scheduled' : 'published' }
   return { event: 'error', message: 'MANUAL_REVIEW_REQUIRED：未确认发布成功，请在平台页面检查' }
 }
+
+/** Keep observing the page briefly because many injectors return before their confirmation UI appears. */
+export async function waitForPublishOutcome({ getState, wait, isClosed = () => false, logs = [], scheduled = false, timeoutMs = 60_000 } = {}) {
+  if (typeof getState !== 'function' || typeof wait !== 'function') throw new Error('缺少发布结果观察器')
+  const deadline = Date.now() + timeoutMs
+  let outcome
+  do {
+    const state = await getState()
+    outcome = classifyPublishOutcome({ ...state, logs, scheduled })
+    if (outcome.event !== 'error' || !outcome.message.includes('未确认发布成功')) return outcome
+    if (Date.now() >= deadline || isClosed()) break
+    await wait(Math.min(1000, deadline - Date.now()))
+  } while (Date.now() < deadline)
+  return outcome
+}

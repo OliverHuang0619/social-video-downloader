@@ -149,6 +149,7 @@ async function api(request: IncomingMessage, response: ServerResponse, url: URL)
   if (request.method === 'POST' && pathname === '/api/codex/logout') { await codex.logout(); return json(response, 200, await codex.status()) }
   if (request.method === 'GET' && pathname === '/api/publisher/status') return json(response, 200, await publisher.status())
   if (request.method === 'POST' && pathname === '/api/publisher/login') { const value = await body<{ platform?: string }>(request); publisher.login(value.platform); return json(response, 202, await publisher.status()) }
+  if (request.method === 'POST' && pathname === '/api/publisher/check-login') { const value = await body<{ platform: string }>(request); return json(response, 200, await publisher.checkLogin(value.platform)) }
   if (request.method === 'GET' && pathname === '/api/publisher/jobs') return json(response, 200, db.publishBatches())
   const artifactMatch = request.method === 'GET' && pathname.match(/^\/api\/publisher\/artifacts\/([^/]+)$/)
   if (artifactMatch) {

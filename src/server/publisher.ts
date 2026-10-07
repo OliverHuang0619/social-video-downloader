@@ -5,12 +5,20 @@ import { mkdir, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { localPublishSubmissionTimes, nextSafePlatformPublishTime, normalizePublishTopics } from '../shared/core'
 import { DOUYIN_TITLE_LIMIT, MULTIPOST_TITLE_LIMIT, isDouyinPublishPlatform, multipostPlatform, publishPlatformLabel, resolvePublishPlatforms } from '../shared/multipost-platforms'
-import type { BrowserStatus, PublishBatch, PublishJob } from '../shared/types'
+import type { BrowserStatus, PublishBatch, PublishJob, PublishPlatformAuth, PublishPlatformAuthState } from '../shared/types'
 import type { AppDatabase } from './db'
 
 type PublishInput = { assetId: string; title: string; topics: string[]; publishAt?: string; aigc?: boolean; waitForCovers?: boolean }
 const terminal = new Set(['published', 'scheduled', 'failed', 'needs_login', 'needs_attention', 'interrupted', 'cancelled'])
 const cancellable = new Set(['queued', 'waiting_local', 'launching', 'waiting_login', 'uploading', 'scheduling', 'waiting_covers', 'submitting'])
+const publishTimeoutMs = 15 * 60_000
+const managedPlatforms = ['douyin', 'VIDEO_WEIXINCHANNEL', 'VIDEO_BILIBILI', 'VIDEO_TOUTIAOHAO']
+const platformProbeUrls: Record<string, string> = {
+  douyin: 'https://creator.douyin.com/creator-micro/content/upload',
+  VIDEO_WEIXINCHANNEL: 'https://channels.weixin.qq.com/platform/post/create',
+  VIDEO_BILIBILI: 'https://member.bilibili.com/platform/upload/video/frame',
+  VIDEO_TOUTIAOHAO: 'https://mp.toutiao.com/profile_v4/xigua/upload-video',
+}
 
 function loadBrowserToken(mode: BrowserStatus['mode']) {
   if (mode !== 'host') return ''
@@ -46,13 +54,15 @@ export class PublisherService {
     let ready = false
     try { const response = await fetch(`${this.browserUrl}/json/version`, { headers: this.browserToken ? { authorization: `Bearer ${this.browserToken}` } : undefined, signal: AbortSignal.timeout(2500) }); ready = response.ok } catch { /* browser offline */ }
     const manageUrl = 'https://creator.douyin.com/creator-micro/content/manage'
-    return { ready, mode: this.browserMode, loginStatus: this.loginStatus, message: ready ? this.message : this.browserMode === 'host' ? '本地浏览器连接助手未启动' : '远程浏览器不可用', remoteUrl: this.browserMode === 'host' ? manageUrl : '/remote-browser/vnc.html?autoconnect=1&resize=scale', manageUrl }
+    const platformAuth = Object.fromEntries(managedPlatforms.map(platform => [platform, this.readPlatformAuth(platform)]))
+    return { ready, mode: this.browserMode, loginStatus: this.loginStatus, message: ready ? this.message : this.browserMode === 'host' ? '本地浏览器连接助手未启动' : '远程浏览器不可用', remoteUrl: this.browserMode === 'host' ? manageUrl : '/remote-browser/vnc.html?autoconnect=1&resize=scale', manageUrl, platformAuth }
   }
   login(platform = 'douyin') {
     if (this.loginRunning) return
     const target = isDouyinPublishPlatform(platform) ? undefined : multipostPlatform(platform)
     if (!isDouyinPublishPlatform(platform) && !target) throw new Error('发布平台无效')
     const label = target?.label
+    if (managedPlatforms.includes(platform)) this.savePlatformAuth(platform, 'pending', '已打开登录页，登录后请点击“验证并启用”')
     this.loginRunning = true
     this.message = label ? `请在浏览器中登录${label}` : this.browserMode === 'host' ? '请在本地浏览器中扫码登录' : '请在站内远程浏览器中扫码登录'
     this.changed()
@@ -64,6 +74,28 @@ export class PublisherService {
       if (event.event === 'error') { this.loginStatus = 'needs_attention'; this.message = String(event.message || '登录未完成') }
       this.changed()
     }).finally(() => { this.loginRunning = false; this.changed() })
+  }
+  async checkLogin(platform: string) {
+    if (!managedPlatforms.includes(platform)) throw new Error('该平台暂不支持登录授权管理')
+    const url = platformProbeUrls[platform]
+    let result: { status: PublishPlatformAuthState; message: string } = { status: 'unknown', message: '未能确认登录状态，请检查页面后重试' }
+    await this.execute(this.multipostScript, ['check-login', url], event => {
+      if (event.event === 'login_checked') result = { status: event.status as PublishPlatformAuthState, message: String(event.message || '') }
+      if (event.event === 'error') result = { status: 'unknown', message: String(event.message || '登录状态检查失败') }
+    })
+    this.savePlatformAuth(platform, result.status, result.message)
+    return this.status()
+  }
+  private readPlatformAuth(platform: string): PublishPlatformAuth {
+    try {
+      const saved = this.db.meta(`publisher:auth:${platform}`)
+      if (saved) return JSON.parse(saved) as PublishPlatformAuth
+    } catch { /* ignore invalid persisted state */ }
+    return { status: 'not_configured', message: '尚未配置登录' }
+  }
+  private savePlatformAuth(platform: string, status: PublishPlatformAuthState, message: string) {
+    this.db.setMeta(`publisher:auth:${platform}`, JSON.stringify({ status, message, updatedAt: new Date().toISOString() } satisfies PublishPlatformAuth))
+    this.changed()
   }
   create(jobs: PublishInput[], dispatchMode: PublishBatch['dispatchMode'], idempotencyKey?: string, platforms?: string[]) {
     if (!jobs.length) throw new Error('没有可发布的视频')
@@ -156,8 +188,8 @@ export class PublisherService {
     if (states.every(value => value === 'published' || value === 'scheduled')) return 'completed'
     if (states.every(value => value === 'cancelled')) return 'cancelled'
     if (states.every(value => ['published', 'scheduled', 'cancelled'].includes(value))) return 'partial'
-    if (states.includes('needs_login') || states.includes('needs_attention')) return 'needs_attention'
     if (states.includes('published') || states.includes('scheduled')) return 'partial'
+    if (states.includes('needs_login') || states.includes('needs_attention')) return 'needs_attention'
     if (states.includes('cancelled') && states.every(value => terminal.has(value))) return 'cancelled'
     return 'failed'
   }
@@ -211,9 +243,8 @@ export class PublisherService {
           }
           this.db.updatePublishBatch(batch.id, 'running')
           this.changed()
-          const ok = await this.runJob(runnable)
+          await this.runJob(runnable)
           if (this.cancelledBatches.has(batch.id)) break
-          if (!ok) { for (const rest of batch.jobs.filter(value => value.id > current.id && !terminal.has(value.status))) this.db.updatePublishJob(rest.id, 'interrupted', { error: '前一任务需要人工处理，批次已停止' }); break }
         }
         if (this.cancelledBatches.has(batch.id)) {
           this.db.updatePublishBatch(batch.id, this.finalizeBatchStatus(batch.id))
@@ -240,7 +271,7 @@ export class PublisherService {
     const cover = path.join(process.env.SVD_CONFIG_DIR || '/config', 'thumbnails', `${asset.id}.jpg`)
     const payload = douyin
       ? { jobId: job.id, file: asset.file, title: job.title, topics: job.topics, publishAt: job.publishAt, aigc: job.aigc, waitForCovers: job.waitForCovers, artifactDir: this.artifactDir }
-      : { jobId: job.id, platform: job.platform, injectUrl: multipostPlatform(job.platform)?.injectUrl, file: asset.file, title: job.title, topics: job.topics, summary: asset.analysis?.summary || '', publishAt: job.publishAt, coverFile: existsSync(cover) ? cover : undefined, artifactDir: this.artifactDir }
+      : { jobId: job.id, platform: job.platform, injectUrl: multipostPlatform(job.platform)?.injectUrl, injectorHost: multipostPlatform(job.platform)?.injectorHost, file: asset.file, title: job.title, topics: job.topics, summary: asset.analysis?.summary || '', publishAt: job.publishAt, coverFile: existsSync(cover) ? cover : undefined, artifactDir: this.artifactDir }
     await writeFile(payloadPath, JSON.stringify(payload))
     let succeeded = false
     await this.execute(douyin ? this.douyinScript : this.multipostScript, ['publish', payloadPath], event => {
@@ -254,7 +285,7 @@ export class PublisherService {
         if (succeeded) this.db.setAssetState(job.assetId, 'processed')
         if (name === 'waiting_login') { this.loginStatus = 'needs_login'; this.message = '请在发布浏览器中扫码登录，完成后会继续发布' }
       }
-      if (name === 'error') { const message = String(event.message || '发布失败'); const status = message.includes('LOGIN_REQUIRED') ? 'needs_login' : message.includes('MANUAL_REVIEW_REQUIRED') ? 'needs_attention' : 'failed'; this.db.updatePublishJob(job.id, status, { error: message, screenshot: event.screenshot ? String(event.screenshot) : undefined }); this.loginStatus = status === 'needs_login' ? 'needs_login' : status === 'needs_attention' ? 'needs_attention' : this.loginStatus; this.message = message }
+      if (name === 'error') { const message = String(event.message || '发布失败'); const status = message.includes('LOGIN_REQUIRED') ? 'needs_login' : message.includes('MANUAL_REVIEW_REQUIRED') ? 'needs_attention' : 'failed'; this.db.updatePublishJob(job.id, status, { error: message, screenshot: event.screenshot ? String(event.screenshot) : undefined }); if (status === 'needs_login' && managedPlatforms.includes(job.platform)) this.savePlatformAuth(job.platform, 'needs_login', '发布时检测到未登录，请重新登录并验证'); this.loginStatus = status === 'needs_login' ? 'needs_login' : status === 'needs_attention' ? 'needs_attention' : this.loginStatus; this.message = message }
       this.changed()
     }, job.batchId)
     await unlink(payloadPath).catch(() => undefined)
@@ -268,10 +299,19 @@ export class PublisherService {
   }
   private execute(script: string, args: string[], onEvent: (event: Record<string, unknown>) => void, batchId?: string) {
     return new Promise<void>(resolve => {
-      const child = spawn('node', [script, ...args], { env: { ...process.env, DOUYIN_CDP_URL: this.browserUrl, DOUYIN_CDP_TOKEN: this.browserToken }, windowsHide: true }); let buffer = '', terminalTimer: NodeJS.Timeout | undefined
+      const child = spawn('node', [script, ...args], { env: { ...process.env, DOUYIN_CDP_URL: this.browserUrl, DOUYIN_CDP_TOKEN: this.browserToken }, windowsHide: true }); let buffer = '', terminalTimer: NodeJS.Timeout | undefined, timeoutTimer: NodeJS.Timeout | undefined, killTimer: NodeJS.Timeout | undefined, hasTerminalEvent = false, timedOut = false, finished = false
       if (batchId) { this.activeChild = child; this.activeBatchId = batchId }
-      const finish = () => { if (terminalTimer) clearTimeout(terminalTimer); if (batchId && this.activeChild === child) { this.activeChild = undefined; this.activeBatchId = undefined } resolve() }
+      const finish = () => {
+        if (finished) return
+        finished = true
+        if (terminalTimer) clearTimeout(terminalTimer)
+        if (timeoutTimer) clearTimeout(timeoutTimer)
+        if (killTimer) clearTimeout(killTimer)
+        if (batchId && this.activeChild === child) { this.activeChild = undefined; this.activeBatchId = undefined }
+        resolve()
+      }
       const consumeEvent = (event: Record<string, unknown>) => {
+        if (['published', 'scheduled', 'error', 'login_opened', 'login_ready', 'login_checked'].includes(String(event.event))) hasTerminalEvent = true
         onEvent(event)
         // A remote CDP websocket can keep Node alive after the page has closed. Once
         // the publisher reports a terminal result, give cleanup a short grace period
@@ -283,7 +323,27 @@ export class PublisherService {
         }
       }
       const consume = (value: Buffer) => { buffer += value.toString(); const lines = buffer.split(/\r?\n/); buffer = lines.pop() || ''; for (const line of lines) { try { consumeEvent(JSON.parse(line)) } catch { /* ignore browser diagnostics */ } } }
-      child.stdout.on('data', consume); child.stderr.on('data', consume); child.on('error', error => { onEvent({ event: 'error', message: error.message }); finish() }); child.on('close', () => { if (buffer.trim()) { try { onEvent(JSON.parse(buffer)) } catch { /* ignore */ } } finish() })
+      const timeout = Math.max(1, Number(process.env.SVD_PUBLISH_JOB_TIMEOUT_MS) || publishTimeoutMs)
+      if (batchId) {
+        timeoutTimer = setTimeout(() => {
+          timedOut = true
+          consumeEvent({ event: 'error', message: `MANUAL_REVIEW_REQUIRED：发布流程超过 ${Math.round(timeout / 60_000)} 分钟，已停止；请先到平台确认是否已发布` })
+          child.kill('SIGTERM')
+          killTimer = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL') }, 5_000)
+          killTimer.unref?.()
+        }, timeout)
+        timeoutTimer.unref?.()
+      }
+      child.stdout.on('data', consume); child.stderr.on('data', consume)
+      child.on('error', error => { consumeEvent({ event: 'error', message: `发布子进程启动失败：${error.message}` }); finish() })
+      child.on('close', (code, signal) => {
+        if (buffer.trim()) { try { consumeEvent(JSON.parse(buffer)) } catch { /* ignore */ } }
+        if (!hasTerminalEvent) {
+          const detail = timedOut ? '发布子进程在超时后退出' : `发布子进程意外退出（${signal ? `信号 ${signal}` : `退出码 ${code}`}），没有返回发布结果`
+          consumeEvent({ event: 'error', message: `MANUAL_REVIEW_REQUIRED：${detail}；请先到平台确认是否已发布` })
+        }
+        finish()
+      })
     })
   }
 }

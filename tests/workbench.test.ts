@@ -358,4 +358,42 @@ describe('工作台持久化与安全边界', () => {
     expect(mixed.jobs[3].publishAt).toBe(later)
     delete process.env.SVD_CAPTURE_DIR
   })
+
+  it('MultiPost 子进程无终态退出后标记失败并继续发布后续平台', async () => {
+    const skill = path.join(root, 'multipost-no-terminal-skill'), scripts = path.join(skill, 'scripts')
+    mkdirSync(scripts, { recursive: true })
+    writeFileSync(path.join(scripts, 'multipost_publisher.mjs'), `import fs from 'node:fs'; const job=JSON.parse(fs.readFileSync(process.argv[3],'utf8')); if (job.platform === 'VIDEO_REDNOTE') { process.stdout.write(JSON.stringify({event:'uploading'})+'\\n'); process.exit(7) } process.stdout.write(JSON.stringify({event:'published'})+'\\n')`)
+    process.env.SVD_SKILL_DIR = skill
+    process.env.SVD_PUBLISH_COOLDOWN_MS = '0'
+    const file = path.join(downloads, 'multipost-no-terminal.mp4'); writeFileSync(file, '')
+    const asset = await library.registerFile(file)
+    const { PublisherService } = await import('../src/server/publisher')
+    const publisher = new PublisherService(db, () => undefined)
+    const batch = publisher.create([{ assetId: asset.id, title: 'Publish everywhere', topics: ['English'] }], 'platform', undefined, ['VIDEO_REDNOTE', 'VIDEO_BILIBILI'])
+    for (let index = 0; index < 250 && !['partial', 'failed', 'needs_attention'].includes(db.publishBatches().find(value => value.id === batch.id)?.status || ''); index += 1) await new Promise(resolve => setTimeout(resolve, 20))
+    const persisted = db.publishBatches().find(value => value.id === batch.id)!
+    expect(persisted.jobs.map(job => job.status)).toEqual(['needs_attention', 'published'])
+    expect(persisted.jobs[0].error).toContain('没有返回发布结果')
+    expect(persisted.status).toBe('partial')
+  })
+
+  it('MultiPost 整体超时后终止子进程并结束任务状态', async () => {
+    const skill = path.join(root, 'multipost-timeout-skill'), scripts = path.join(skill, 'scripts')
+    mkdirSync(scripts, { recursive: true })
+    writeFileSync(path.join(scripts, 'multipost_publisher.mjs'), `process.stdout.write(JSON.stringify({event:'uploading'})+'\\n'); setInterval(()=>{},1000)`)
+    process.env.SVD_SKILL_DIR = skill
+    process.env.SVD_PUBLISH_COOLDOWN_MS = '0'
+    process.env.SVD_PUBLISH_JOB_TIMEOUT_MS = '40'
+    const file = path.join(downloads, 'multipost-timeout.mp4'); writeFileSync(file, '')
+    const asset = await library.registerFile(file)
+    const { PublisherService } = await import('../src/server/publisher')
+    const publisher = new PublisherService(db, () => undefined)
+    const batch = publisher.create([{ assetId: asset.id, title: 'Timeout', topics: ['English'] }], 'platform', undefined, ['VIDEO_REDNOTE'])
+    for (let index = 0; index < 250 && !['needs_attention', 'failed', 'partial'].includes(db.publishBatches().find(value => value.id === batch.id)?.status || ''); index += 1) await new Promise(resolve => setTimeout(resolve, 20))
+    const persisted = db.publishBatches().find(value => value.id === batch.id)!
+    expect(persisted.status).toBe('needs_attention')
+    expect(persisted.jobs[0]).toMatchObject({ status: 'needs_attention' })
+    expect(persisted.jobs[0].error).toContain('发布流程超过')
+    delete process.env.SVD_PUBLISH_JOB_TIMEOUT_MS
+  })
 })

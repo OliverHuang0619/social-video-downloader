@@ -670,6 +670,11 @@ button.small { min-height: 26px; padding: 0 8px; font-size: 12px; }
 .platform-picker { display: flex; flex-wrap: wrap; gap: 8px; max-height: 168px; overflow: auto; }
 .platform-picker .chip { cursor: pointer; }
 .platform-login-list { max-height: 360px; overflow: auto; margin-top: 8px; }
+.platform-auth-row { align-items: center; gap: 16px; }
+.platform-auth-row > div:first-child { display: grid; grid-template-columns: auto auto; align-items: center; justify-content: start; gap: 4px 9px; }
+.platform-auth-row small { grid-column: 1 / -1; color: var(--ink-3); }
+.platform-auth-row > .row { flex-shrink: 0; }
+.build-label { display: block; margin-top: 4px; color: var(--ink-3); font: 10px var(--font-data); }
 .settings-section h3 { margin: 22px 0 4px; font-size: 15px; }
 .modal .check { font-size: 13.5px; }
 .modal .label-row { display: flex; justify-content: space-between; align-items: baseline; }
@@ -925,6 +930,7 @@ button.small { min-height: 26px; padding: 0 8px; font-size: 12px; }
   .rail { padding: 0 12px; }
   .brand { margin-right: 12px; }
   .brand p { display: none; }
+  .build-label { font-size: 9px; }
   .stage { padding: 0 12px; }
   .publish-job { grid-template-columns: minmax(140px, 1fr) 90px 150px; }
   .publish-job > span:nth-child(4), .publish-job-head > span:nth-child(4) { display: none; }

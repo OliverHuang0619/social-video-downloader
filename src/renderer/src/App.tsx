@@ -328,9 +328,15 @@ function DownloadPage({ jobs, setJobs }: { jobs: DownloadJob[]; setJobs: (jobs: 
 
 /* -------------------------------------------------------------- publish */
 
-function PublishDialog({ assets, close, done }: { assets: MediaAsset[]; close: () => void; done: () => void }) {
+const managedPublishPlatforms = [
+  { id: DOUYIN_PUBLISH_PLATFORM, label: '抖音' },
+  ...MULTIPOST_PLATFORMS.filter(platform => ['VIDEO_WEIXINCHANNEL', 'VIDEO_BILIBILI', 'VIDEO_TOUTIAOHAO'].includes(platform.id)),
+]
+
+function PublishDialog({ assets, close, done, platformAuth }: { assets: MediaAsset[]; close: () => void; done: () => void; platformAuth: BrowserStatus['platformAuth'] }) {
   const single = assets.length === 1
-  const [platforms, setPlatforms] = useState<string[]>([DOUYIN_PUBLISH_PLATFORM])
+  const choices = managedPublishPlatforms.filter(platform => platformAuth[platform.id]?.status === 'authorized')
+  const [platforms, setPlatforms] = useState<string[]>([])
   const douyinSelected = platforms.includes(DOUYIN_PUBLISH_PLATFORM)
   const titleLimit = douyinSelected ? 30 : 100
   const [dispatchMode, setDispatch] = useState<'platform' | 'local'>('platform')
@@ -343,7 +349,6 @@ function PublishDialog({ assets, close, done }: { assets: MediaAsset[]; close: (
   const [waitForCovers, setWaitForCovers] = useState(false)
   const [message, setMessage] = useState('')
   const topicCount = topics.split(/[#\s,，]+/).filter(Boolean).length
-  const choices = [{ id: DOUYIN_PUBLISH_PLATFORM, label: '抖音' }, ...MULTIPOST_PLATFORMS]
   const togglePlatform = (id: string) => setPlatforms(current => {
     const next = current.includes(id) ? current.filter(item => item !== id) : [...current, id]
     if (!next.length) return current
@@ -376,9 +381,9 @@ function PublishDialog({ assets, close, done }: { assets: MediaAsset[]; close: (
       <div className="modal-head"><h2>发布视频</h2><p>{single ? (assets[0].analysis?.title || assets[0].filename) : `${assets.length} 个视频，标题与话题取自各自的分析结果`}</p></div>
       <fieldset>
         <legend>发布平台</legend>
-        <div className="platform-picker" role="group" aria-label="发布平台">
+        {choices.length ? <div className="platform-picker" role="group" aria-label="发布平台">
           {choices.map(choice => <button type="button" className={`chip ${platforms.includes(choice.id) ? 'active' : ''}`} aria-pressed={platforms.includes(choice.id)} key={choice.id} onClick={() => togglePlatform(choice.id)}>{choice.label}</button>)}
-        </div>
+        </div> : <p className="hint">尚无已授权平台。请先到「设置 → 发布浏览器」登录并验证授权。</p>}
       </fieldset>
       {single ? <>
         <label><span className="label-row">英文标题<span>{[...title].length} / {titleLimit}</span></span><input maxLength={titleLimit} value={title} onChange={event => setTitle(event.target.value)} /></label>
@@ -395,7 +400,7 @@ function PublishDialog({ assets, close, done }: { assets: MediaAsset[]; close: (
         <label className="check"><input type="checkbox" checked={aigc} onChange={event => setAigc(event.target.checked)} />声明“内容由 AI 生成”</label>
         <label className="check"><input type="checkbox" checked={waitForCovers} onChange={event => setWaitForCovers(event.target.checked)} />等待横竖封面生成完成后再提交</label>
       </fieldset> : null}
-      <p className="warning">将通过可见浏览器依次提交所选平台；相邻任务随机间隔 1–3 分钟。遇到登录、验证码或风控会暂停。没有识别到明确成功结果时，任务会标为需要检查。</p>
+      <p className="warning">将通过可见浏览器依次提交所选平台；相邻任务随机间隔 1–3 分钟。单个平台失败会记录结果并继续后续任务；验证码或风控需要人工处理。没有识别到明确成功结果时，任务会标为需要检查。</p>
       {message ? <p className="error">{message}</p> : null}
       <div className="modal-foot"><button onClick={close}>取消</button><button className="primary" onClick={() => void submit()}>确认发布</button></div>
     </div>
@@ -509,7 +514,7 @@ const AssetCard = memo(function AssetCard({ asset, selected, remade, toggle, pla
   </article>
 })
 
-function LibraryPage({ assets, remakes, reload, openTasks }: { assets: MediaAsset[]; remakes: RemakeJob[]; reload: () => void; openTasks: (taskTab: TaskTab) => void }) {
+function LibraryPage({ assets, remakes, reload, openTasks, platformAuth }: { assets: MediaAsset[]; remakes: RemakeJob[]; reload: () => void; openTasks: (taskTab: TaskTab) => void; platformAuth: BrowserStatus['platformAuth'] }) {
   const [selected, setSelected] = useState<Set<string>>(new Set()), [queryInput, setQueryInput] = useState(''), [state, setState] = useState<LibraryViewFilter>('unprocessed'), [category, setCategory] = useState('all'), [directory, setDirectory] = useState(() => storedValue(LIBRARY_DIRECTORY_STORAGE_KEY, 'all')), [playing, setPlaying] = useState<MediaAsset>(), [publishing, setPublishing] = useState<MediaAsset[]>(), [remaking, setRemaking] = useState<MediaAsset[]>(), [deleting, setDeleting] = useState<MediaAsset[]>(), [importOpen, setImportOpen] = useState(false), [importPath, setImportPath] = useState('/downloads'), [importing, setImporting] = useState(false), [message, setMessage] = useState(''), [localActions, setLocalActions] = useState<LocalFileActionsStatus>({ reveal: false, airdrop: false })
   const query = useDeferredValue(queryInput.trim())
   const categories = useMemo(() => [...new Set(assets.map(asset => asset.analysis?.category).filter(Boolean) as string[])].sort(), [assets])
@@ -588,7 +593,7 @@ function LibraryPage({ assets, remakes, reload, openTasks }: { assets: MediaAsse
     {visible.length ? <main className="asset-grid">{visible.map(asset => <AssetCard key={asset.id} asset={asset} selected={selected.has(asset.id)} remade={remadeAssets.ids.has(asset.id) || remadeAssets.files.has(asset.file)} toggle={toggle} play={play} mark={mark} publish={publishOne} reveal={localActions.reveal ? revealOne : undefined} share={localActions.airdrop ? shareOne : undefined} />)}</main>
       : <section className="panel"><div className="empty">{assets.length ? <><strong>没有符合条件的视频</strong>试试切换状态、分类或目录，或清空搜索词</> : <><strong>媒体库是空的</strong>完成下载后视频会自动出现，也可以点击「导入目录」登记服务器上的文件</>}</div></section>}
     {playing ? <div className="modal-bg" role="dialog" aria-modal="true" aria-label="视频播放" onMouseDown={() => setPlaying(undefined)}><div className="modal player" onMouseDown={event => event.stopPropagation()}><button className="player-close" aria-label="关闭播放" title="关闭 (Esc)" onClick={() => setPlaying(undefined)}>×</button><h2>{playing.analysis?.title || playing.filename}</h2><video controls autoPlay src={api.library.mediaUrl(playing.id)} /><p className="filename">{playing.filename}</p></div></div> : null}
-    {publishing ? <PublishDialog assets={publishing} close={() => setPublishing(undefined)} done={() => { setPublishing(undefined); openTasks('publisher') }} /> : null}
+    {publishing ? <PublishDialog assets={publishing} close={() => setPublishing(undefined)} done={() => { setPublishing(undefined); openTasks('publisher') }} platformAuth={platformAuth} /> : null}
     {remaking ? <RemakeDialog assets={remaking} close={() => setRemaking(undefined)} done={() => { setRemaking(undefined); openTasks('remake') }} /> : null}
     {deleting ? <DeleteDialog assets={deleting} close={() => setDeleting(undefined)} done={() => { setDeleting(undefined); setSelected(new Set()); reload() }} /> : null}
   </div>
@@ -1084,6 +1089,7 @@ function SubscriptionSettingsPanel() {
 
 function SettingsPage({ tools, codex, hypit, browser, refresh, logout }: { tools: ToolStatus | null; codex: CodexStatus | null; hypit: HypitStatus | null; browser: BrowserStatus | null; refresh: () => void; logout: () => void }) {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(() => storedChoice(SETTINGS_TAB_STORAGE_KEY, settingsTabs, 'codex'))
+  const [checkingPlatform, setCheckingPlatform] = useState('')
   const official = !codex || codex.mode === 'official'
   useEffect(() => { try { window.localStorage.setItem(SETTINGS_TAB_STORAGE_KEY, settingsTab) } catch { /* storage unavailable */ } }, [settingsTab])
   return <section className="panel task-panel settings-panel">
@@ -1128,11 +1134,20 @@ function SettingsPage({ tools, codex, hypit, browser, refresh, logout }: { tools
     {settingsTab === 'subscriptions' ? <SubscriptionSettingsPanel /> : null}
     {settingsTab === 'browser' ? <div className="settings-section" role="tabpanel">
       <h2>发布浏览器</h2>
-      <p>{browser?.message || '正在检查…'}</p>
-      <div className="row"><a className="button" target="_blank" rel="noreferrer" href={browser?.remoteUrl || '/remote-browser/vnc.html?autoconnect=1&resize=scale'}>{browser?.mode === 'host' ? '打开本地浏览器' : '打开远程浏览器'}</a><button className="primary" disabled={!browser?.ready} onClick={() => void api.publisher.login().then(refresh)}>登录抖音</button></div>
-      <h3>其他平台登录</h3>
-      <p>在同一发布浏览器中打开平台页面并登录，登录态会保留在这个浏览器里。</p>
-      <div className="platform-login-list">{MULTIPOST_PLATFORMS.map(platform => <div className="status-row" key={platform.id}><span>{platform.label}</span><button disabled={!browser?.ready} onClick={() => void api.publisher.login(platform.id).then(refresh)}>打开登录页</button></div>)}</div>
+      <p>{browser?.ready ? '平台登录会话保存在持久浏览器配置文件中；登录后请验证，验证通过的平台才会出现在发布窗口。' : browser?.message || '正在检查…'}</p>
+      <div className="row"><a className="button" target="_blank" rel="noreferrer" href={browser?.remoteUrl || '/remote-browser/vnc.html?autoconnect=1&resize=scale'}>{browser?.mode === 'host' ? '打开本地浏览器' : '打开远程浏览器'}</a></div>
+      <h3>发布平台授权</h3>
+      <div className="platform-login-list">{managedPublishPlatforms.map(platform => {
+        const auth = browser?.platformAuth[platform.id]
+        const authorized = auth?.status === 'authorized'
+        const checking = checkingPlatform === platform.id
+        const stateLabel = authorized ? '已授权' : auth?.status === 'pending' ? '待验证' : auth?.status === 'needs_login' ? '需要登录' : auth?.status === 'unknown' ? '未确认' : '未配置'
+        return <div className="status-row platform-auth-row" key={platform.id}>
+          <div><strong>{platform.label}</strong><span className={`pill ${authorized ? 'ready' : auth?.status === 'needs_login' ? 'failed' : ''}`}>{stateLabel}</span><small>{auth?.message || '尚未配置登录'}</small></div>
+          <div className="row"><button disabled={!browser?.ready} onClick={() => void api.publisher.login(platform.id).then(refresh)}>{auth?.status === 'not_configured' ? '登录' : '重新登录'}</button><button className="primary" disabled={!browser?.ready || checking} onClick={() => { setCheckingPlatform(platform.id); void api.publisher.checkLogin(platform.id).then(refresh).catch(error => toast(errorText(error), 'bad')).finally(() => setCheckingPlatform('')) }}>{checking ? '验证中…' : authorized ? '重新验证' : '验证并启用'}</button></div>
+        </div>
+      })}</div>
+      <p className="muted">授权状态保存在工作台数据库；平台 Cookie 与登录会话保存在浏览器配置文件中，不会写入工作台数据库。</p>
     </div> : null}
     {settingsTab === 'security' ? <div className="settings-section" role="tabpanel">
       <h2>安全</h2>
@@ -1169,7 +1184,7 @@ function App() {
   if (!authenticated) return <Login onLogin={() => setAuthenticated(true)} />
   return <div className="app">
     <header className="rail">
-      <div className="brand"><div className="brand-mark">▶</div><div><h1>Social Video 工作台</h1><p>下载 → 分析 → 审核 → 发布</p></div></div>
+      <div className="brand"><div className="brand-mark">▶</div><div><h1>Social Video 工作台</h1><p>下载 → 分析 → 审核 → 发布</p><small className="build-label">v{__APP_VERSION__} · 构建于 {new Date(__APP_BUILD_TIME__).toLocaleString()}</small></div></div>
       <nav className="stages" aria-label="工作流阶段">{stages.map(stage => <button className={`stage ${tab === stage.id ? 'active' : ''}`} key={stage.id} aria-current={tab === stage.id ? 'page' : undefined} onClick={() => setTab(stage.id)}><strong>{stage.label}</strong><span className={`stage-status ${stage.tone || ''}`}>{stage.status}</span></button>)}</nav>
       <div className="rail-actions">
         <NotificationBell />
@@ -1178,7 +1193,7 @@ function App() {
     </header>
     <div className={tab === 'library' ? 'content library-content' : 'content'}>
       {tab === 'download' ? <DownloadPage jobs={downloads} setJobs={setDownloads} />
-        : tab === 'library' ? <LibraryPage assets={assets} remakes={remakeJobs} reload={loadLibrary} openTasks={taskTab => { try { window.localStorage.setItem(TASK_TAB_STORAGE_KEY, taskTab) } catch { /* storage unavailable */ } setTab('tasks') }} />
+        : tab === 'library' ? <LibraryPage assets={assets} remakes={remakeJobs} reload={loadLibrary} platformAuth={browser?.platformAuth || {}} openTasks={taskTab => { try { window.localStorage.setItem(TASK_TAB_STORAGE_KEY, taskTab) } catch { /* storage unavailable */ } setTab('tasks') }} />
         : tab === 'tasks' ? <TasksPage analysis={analysisJobs} remakes={remakeJobs} batches={batches} assets={assets} reload={loadTasks} />
         : <SettingsPage tools={tools} codex={codex} hypit={hypit} browser={browser} refresh={loadSettings} logout={() => void api.auth.logout().then(() => setAuthenticated(false))} />}
     </div>

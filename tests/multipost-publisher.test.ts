@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { MULTIPOST_PLATFORMS } from '../src/shared/multipost-platforms'
 import { multipostInjectors } from '../skills/english-video-catalog/scripts/multipost/injectors.mjs'
 import { buildSyncData, clampPublishTitle, isPublishMediaRequest, isWeixinMediaSuiteWasm, publishMediaUrls, resolveMediaFulfillment } from '../skills/english-video-catalog/scripts/multipost/media.mjs'
-import { classifyPublishOutcome } from '../skills/english-video-catalog/scripts/multipost/outcome.mjs'
+import { classifyPublishOutcome, waitForPublishOutcome } from '../skills/english-video-catalog/scripts/multipost/outcome.mjs'
 
 describe('MultiPost 视频平台', () => {
   it('目录覆盖上游全部非抖音视频平台，并带有对应注入函数', () => {
@@ -16,7 +16,21 @@ describe('MultiPost 视频平台', () => {
       expect(platform.homeUrl).toMatch(/^https?:\/\//)
       expect(platform.injectUrl).toMatch(/^https?:\/\//)
       expect(typeof multipostInjectors[platform.id]).toBe('function')
+      const hostGuard = multipostInjectors[platform.id].toString().match(/window\.location\.href\.includes\("([^"]+)"\)/)?.[1]
+      expect(platform.injectorHost).toBe(hostGuard)
+      if (platform.injectorHost) expect(new URL(platform.injectUrl).hostname.endsWith(platform.injectorHost)).toBe(true)
     }
+  })
+
+  it('等待延迟出现的发布成功提示再返回终态', async () => {
+    let reads = 0
+    const outcome = await waitForPublishOutcome({
+      getState: async () => ({ url: 'https://creator.xiaohongshu.com/publish', body: ++reads < 3 ? '正在提交' : '发布成功', hasFileInput: true }),
+      wait: async () => undefined,
+      timeoutMs: 100,
+    })
+    expect(outcome).toEqual({ event: 'published' })
+    expect(reads).toBe(3)
   })
 
   it('只把本地视频和封面应答给发布页里的指定地址', () => {
@@ -70,6 +84,13 @@ describe('MultiPost 视频平台', () => {
     const urls = publishMediaUrls('job-wx')
     const sync = buildSyncData({ platform: 'VIDEO_WEIXINCHANNEL', file: '/downloads/lesson.mp4', title: 'Talking About Rainy Weather', summary: '练习下雨天。', topics: [] }, urls)
     expect(sync.data.title).toBe('Talking About')
+  })
+
+  it('视频号短标题替换不支持的撇号和逗号，保留允许的引号与标点', () => {
+    const urls = publishMediaUrls('job-wx-punctuation')
+    const sync = buildSyncData({ platform: 'VIDEO_WEIXINCHANNEL', file: '/downloads/lesson.mp4', title: "It's a Frog, 20%?", topics: [] }, urls)
+    expect(sync.data.title).toBe('It’s a Frog 20%?')
+    expect(sync.data.title).not.toContain("'")
   })
 
   it('只拦截本地发布文件和视频号编辑器 wasm', () => {

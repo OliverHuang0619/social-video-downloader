@@ -41,11 +41,24 @@ export function clampPublishTitle(title, limit) {
   return cut.trim()
 }
 
+/** Video Channels short titles allow only a small punctuation set; normalize imported titles before filling the field. */
+export function normalizeWeixinChannelTitle(title) {
+  return String(title || '')
+    .replace(/'/g, '’')
+    .replace(/"/g, '”')
+    .replace(/[,，]/g, ' ')
+    .replace(/[^\p{L}\p{N}\s《》“”‘’：:+?？%℃]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 export function buildSyncData(payload, urls) {
   const videoName = String(payload.file || 'video.mp4').split(/[/\\]/).pop() || 'video.mp4'
   const titleLimit = payload.platform === 'VIDEO_WEIXINCHANNEL' ? 16 : 0
+  const rawTitle = payload.title || ''
+  const title = titleLimit ? clampPublishTitle(normalizeWeixinChannelTitle(rawTitle), titleLimit) : rawTitle
   const data = {
-    title: titleLimit ? clampPublishTitle(payload.title || '', titleLimit) : (payload.title || ''),
+    title,
     content: payload.summary || '',
     video: { name: videoName, url: urls.videoUrl, type: payload.videoType || videoContentType(payload.file || '') },
     tags: (payload.topics || []).map(topic => String(topic).replace(/^#+/, '').trim()).filter(Boolean).slice(0, 5),

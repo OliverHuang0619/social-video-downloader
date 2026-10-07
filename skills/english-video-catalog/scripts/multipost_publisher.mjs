@@ -6,7 +6,7 @@ import process from "node:process";
 import { chromium } from "playwright-core";
 import { multipostInjectors } from "./multipost/injectors.mjs";
 import { buildSyncData, isPublishMediaRequest, isWeixinMediaSuiteWasm, publishMediaUrls, resolveMediaFulfillment, videoContentType } from "./multipost/media.mjs";
-import { classifyPublishOutcome, detectChallenge, detectLogin } from "./multipost/outcome.mjs";
+import { detectChallenge, detectLogin, waitForPublishOutcome } from "./multipost/outcome.mjs";
 
 const command = process.argv[2] || "";
 const argument = process.argv[3] || "";
@@ -87,6 +87,10 @@ async function waitForSignal(page, timeoutMs) {
   return state;
 }
 
+function hostMatches(hostname, expectedHost) {
+  return !expectedHost || hostname === expectedHost || hostname.endsWith(`.${expectedHost}`);
+}
+
 async function waitForUploadAfterLogin(page, injectUrl, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let navigated = false;
@@ -157,6 +161,25 @@ async function openLogin(homeUrl) {
   await disconnect(context, false);
 }
 
+async function checkLogin(url) {
+  if (!/^https?:\/\//.test(url)) throw new Error("验证地址无效");
+  const { context, remote } = await launch();
+  const page = await context.newPage();
+  try {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 90000 });
+    const state = await waitForSignal(page, 20000);
+    const authorized = state.hasFileInput && !detectLogin(state);
+    emit("login_checked", {
+      status: authorized ? "authorized" : detectLogin(state) ? "needs_login" : "unknown",
+      url: state.url || page.url(),
+      message: authorized ? "已检测到平台创作页面" : detectLogin(state) ? "平台仍显示登录页面" : "未能确认登录状态，请检查页面后重试",
+    });
+  } finally {
+    await page.close().catch(() => undefined);
+    await disconnect(context, remote);
+  }
+}
+
 async function publish(payloadPath) {
   const payload = JSON.parse(fs.readFileSync(payloadPath, "utf8"));
   const injector = multipostInjectors[payload.platform];
@@ -198,6 +221,12 @@ async function publish(payloadPath) {
         return;
       }
     }
+    const finalHost = new URL(page.url()).hostname;
+    if (!hostMatches(finalHost, payload.injectorHost)) {
+      const shot = await screenshot(page, payload.artifactDir, payload.jobId);
+      emit("error", { message: `MANUAL_REVIEW_REQUIRED：发布页域名不匹配，预期 ${payload.injectorHost}，实际 ${finalHost}`, screenshot: shot });
+      return;
+    }
     emit("uploading");
     const sync = buildSyncData({ ...payload, videoType: files.videoType }, urls);
     if (payload.platform === "VIDEO_WEIXINCHANNEL") {
@@ -215,15 +244,14 @@ async function publish(payloadPath) {
       evaluateError = error instanceof Error ? error.message : String(error);
     }
     if (evaluateError) logs.push(`发布过程中出错: ${evaluateError}`);
-    await page.waitForTimeout(1500);
-    const body = await pageText(page);
-    const outcome = classifyPublishOutcome({
-      url: page.url(),
-      body,
+    const outcome = await waitForPublishOutcome({
+      getState: () => observePage(page),
+      wait: milliseconds => page.waitForTimeout(milliseconds),
+      isClosed: () => page.isClosed(),
       logs,
       scheduled: Boolean(payload.publishAt),
-      hasFileInput: await hasFileInput(page),
     });
+    const body = await pageText(page);
     const shot = await screenshot(page, payload.artifactDir, payload.jobId);
     if (outcome.event === "error") {
       let message = outcome.message;
@@ -241,8 +269,9 @@ async function publish(payloadPath) {
 
 try {
   if (command === "login") await openLogin(argument);
+  else if (command === "check-login") await checkLogin(argument);
   else if (command === "publish") await publish(argument);
-  else throw new Error("用法：multipost_publisher.mjs login <url> | publish <payload.json>");
+  else throw new Error("用法：multipost_publisher.mjs login <url> | check-login <url> | publish <payload.json>");
 } catch (error) {
   emit("error", { message: error instanceof Error ? error.message : String(error) });
   process.exitCode = 1;
