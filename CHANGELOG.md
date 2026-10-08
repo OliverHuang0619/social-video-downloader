@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.4.0 - 2026-10-08
+
+### Features
+
+- Add Cloudflare Workers and Containers deployment with D1, R2-backed media, queues, subscriptions, and push notifications.
+- Add per-video publishing copy, Bilibili and WeChat Channels publishing, and local scheduled publishing workflows.
+- Add an incremental Cloudflare publish command, `npm run cloudflare:publish`, that rebuilds and publishes without rerunning migrations or CORS setup.
+
+### Fixes
+
+- Keep publishing batches moving after individual failures and start the first item immediately by default.
+- Improve Cloudflare container cold-start handling and safely quote container and instance IDs in SSH commands.
+- Correct WeChat Channels publishing outcomes and Chinese titles.
+
+### Documentation
+
+- Document Cloudflare setup, full deployment, and incremental publishing workflows.
+
 ## 1.3.0 - 2026-10-07
 
 ### Features
