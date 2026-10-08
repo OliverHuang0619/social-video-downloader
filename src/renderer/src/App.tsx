@@ -206,6 +206,7 @@ function CookieManager({ cookieSource, setCookieSource }: { cookieSource: 'none'
 function DownloadPage({ jobs, setJobs }: { jobs: DownloadJob[]; setJobs: (jobs: DownloadJob[]) => void }) {
   const [mode, setMode] = useState<'links' | 'creator' | 'subscriptions'>('links'), [input, setInput] = useState(''), [items, setItems] = useState<MediaItem[]>([]), [options, setOptions] = useState(initialOptions), [message, setMessage] = useState(''), [busy, setBusy] = useState(false), [queueView, setQueueView] = useState<'active' | 'failed' | 'all'>('active')
   const [subscriptions, setSubscriptions] = useState<CreatorSubscription[]>([]), [autoDownloadOnAdd, setAutoDownloadOnAdd] = useState(false)
+  const [registeringJobId, setRegisteringJobId] = useState<string>()
   const deferred = useDeferredValue(items), selected = useMemo(() => items.filter(item => item.selected), [items])
   const loadSubscriptions = useCallback(() => { void api.subscriptions.list().then(setSubscriptions).catch(error => setMessage(errorText(error))) }, [])
   useEffect(() => { void Promise.all([api.destination.current(), api.downloads.list()]).then(([outputRoot, history]) => { setOptions(value => ({ ...value, outputRoot })); if (history.length) setJobs(history) }) }, [setJobs])
@@ -245,6 +246,12 @@ function DownloadPage({ jobs, setJobs }: { jobs: DownloadJob[]; setJobs: (jobs: 
   const finished = jobs.length - active.length
   const visibleJobs = queueView === 'all' ? newestFirst : queueView === 'failed' ? failedJobs : active
   const retry = async (id?: string) => { try { const result = await api.downloads.retry(id); toast(id ? '已重新加入队列，将复用本地已下载的部分' : `已重试 ${result.count} 个失败任务`) } catch (error) { toast(errorText(error), 'bad') } }
+  const registerInLibrary = async (id: string) => {
+    setRegisteringJobId(id)
+    try { await api.downloads.register(id); setJobs(await api.downloads.list()); toast('已登记到媒体库') }
+    catch (error) { toast(errorText(error), 'bad') }
+    finally { setRegisteringJobId(undefined) }
+  }
   return <div className="page-stack">
     <section className="panel source">
       <div className="source-head">
@@ -320,6 +327,15 @@ function DownloadPage({ jobs, setJobs }: { jobs: DownloadJob[]; setJobs: (jobs: 
         <div className="row between"><span className="task-title" title={job.item.title}>{job.item.title}</span><span className="row">{['failed', 'cancelled'].includes(job.status) ? <button className="ghost small" onClick={() => void retry(job.id)}>重试</button> : null}<span className={`pill ${job.status}`}>{taskNames[job.status] || job.status}</span></span></div>
         <div className={`progress ${['completed', 'skipped'].includes(job.status) ? 'done' : job.status === 'failed' ? 'bad' : ''}`}><i style={{ width: `${job.progress}%` }} /></div>
         {job.status === 'failed' ? <p className="error task-error">{job.error || '下载失败'}</p> : <div className="task-meta"><span className="data">{job.progress.toFixed(1)}%</span><span>·</span><span>{job.detail || '等待中'}</span>{job.speed ? <span className="data">· {job.speed}</span> : null}{job.eta ? <span className="data">· 剩余 {job.eta}</span> : null}</div>}
+        {['completed', 'skipped'].includes(job.status) ? <div className="download-complete-details">
+          <div><span>完成时间</span><time>{job.completedAt ? new Date(job.completedAt).toLocaleString() : '旧任务未记录'}</time></div>
+          <div className="download-storage"><span>存储位置</span><code title={job.storagePath || job.outputPath || '路径不可用'}>{job.storagePath || job.outputPath || '路径不可用'}</code></div>
+          <div className="row download-complete-actions">
+            {job.outputPath ? <a className="button ghost small" href={api.downloads.fileUrl(job.id)}>下载到本地</a> : null}
+            {!job.assetId && job.outputPath ? <button className="ghost small" disabled={registeringJobId === job.id} onClick={() => void registerInLibrary(job.id)}>{registeringJobId === job.id ? '登记中…' : '登记到媒体库'}</button> : null}
+          </div>
+          {job.libraryError ? <p className="task-library-error">媒体库登记失败：{job.libraryError}</p> : null}
+        </div> : null}
       </div>) : <div className="empty small">{queueView === 'failed' ? '没有失败的下载' : queueView === 'active' ? '没有进行中的下载' : '队列为空'}</div>}</div>
     </section> : null}
     </>}
@@ -334,6 +350,11 @@ const managedPublishPlatforms = [
 ]
 
 function PublishDialog({ assets, close, done, platformAuth }: { assets: MediaAsset[]; close: () => void; done: () => void; platformAuth: BrowserStatus['platformAuth'] }) {
+  const defaultPublishStart = () => {
+    const step = 30 * 60_000
+    const date = new Date(Math.ceil((Date.now() + 125 * 60_000) / step) * step)
+    return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
+  }
   const single = assets.length === 1
   const choices = managedPublishPlatforms.filter(platform => platformAuth[platform.id]?.status === 'authorized')
   const [platforms, setPlatforms] = useState<string[]>(() => ["VIDEO_BILIBILI", "VIDEO_WEIXINCHANNEL"].filter(id => platformAuth[id]?.status === 'authorized'))
@@ -341,7 +362,7 @@ function PublishDialog({ assets, close, done, platformAuth }: { assets: MediaAss
   const titleLimit = douyinSelected ? 30 : 100
   const [dispatchMode, setDispatch] = useState<'platform' | 'local'>('platform')
   const [scheduled, setScheduled] = useState(!single)
-  const [start, setStart] = useState('')
+  const [start, setStart] = useState(defaultPublishStart)
   const [interval, setIntervalValue] = useState(1)
   const [useChineseTitle, setUseChineseTitle] = useState(true)
   const [details, setDetails] = useState<Record<string, { title: string; topics: string; summary: string }>>(() => Object.fromEntries(assets.map(asset => {
@@ -369,7 +390,7 @@ function PublishDialog({ assets, close, done, platformAuth }: { assets: MediaAss
   const submit = async () => {
     if (!platforms.length) return setMessage('请至少选择一个平台')
     const startDate = start ? new Date(start) : undefined
-    const mode = douyinSelected && platforms.length === 1 ? dispatchMode : 'platform'
+    const mode = single ? 'platform' : dispatchMode
     const automatic = !single && douyinSelected && mode === 'platform' && !start
     const automaticTimes = automatic ? automaticPlatformPublishTimes(assets.length, interval) : []
     if (scheduled && (startDate && Number.isNaN(startDate.getTime()) || single && !startDate || mode === 'local' && !startDate)) return setMessage('请选择有效的首条发布时间')
@@ -418,9 +439,9 @@ function PublishDialog({ assets, close, done, platformAuth }: { assets: MediaAss
       })}</div>}
       {single ? <>
         <div className="field"><span id="publish-timing">发布时间</span><div className="segmented" role="tablist" aria-labelledby="publish-timing"><button type="button" role="tab" aria-selected={!scheduled} className={scheduled ? '' : 'active'} onClick={() => setScheduled(false)}>立即发布</button><button type="button" role="tab" aria-selected={scheduled} className={scheduled ? 'active' : ''} onClick={() => setScheduled(true)}>定时发布</button></div></div>
-      </> : douyinSelected && platforms.length === 1 ? <label>批量执行方式<select value={dispatchMode} onChange={event => setDispatch(event.target.value as 'platform' | 'local')}><option value="platform">一次性提交到抖音平台排期</option><option value="local">本地到点后逐条提交</option></select></label> : <p className="hint">多个平台按队列串行提交，不使用本地定时。</p>}
+      </> : <label>批量执行方式<select value={dispatchMode} onChange={event => { const mode = event.target.value as 'platform' | 'local'; setDispatch(mode); setStart(current => mode === 'local' ? '' : current || defaultPublishStart()) }}><option value="platform">一次性提交到平台排期</option><option value="local">使用本地排期，到点后逐条提交</option></select></label>}
       {scheduled ? <>
-        <label>{!single && douyinSelected && dispatchMode === 'platform' ? '首条发布时间（留空则首条立即发布，后续自动排期）' : !single ? '首条发布时间（留空则立即发布）' : '首条发布时间'}<input type="datetime-local" value={start} onChange={event => setStart(event.target.value)} /></label>
+        <label>{!single && dispatchMode === 'local' ? '首条本地执行时间' : !single && douyinSelected && dispatchMode === 'platform' ? '首条发布时间（留空则首条立即发布，后续自动排期）' : !single ? '首条发布时间（留空则立即发布）' : '首条发布时间'}<input type="datetime-local" value={start} onChange={event => setStart(event.target.value)} /></label>
         {!single && (douyinSelected || start) ? <label>相邻作品的发布间隔（小时）<input type="number" min="1" value={interval} onChange={event => setIntervalValue(Math.max(1, Number(event.target.value)))} /></label> : null}
       </> : null}
       {douyinSelected ? <fieldset>
@@ -621,7 +642,7 @@ function LibraryPage({ assets, remakes, reload, openTasks, platformAuth }: { ass
     </section>
     {message && !importOpen ? <p className="error">{message}</p> : null}
     {visible.length ? <main className="asset-grid">{visible.map(asset => <AssetCard key={asset.id} asset={asset} selected={selected.has(asset.id)} remade={remadeAssets.ids.has(asset.id) || remadeAssets.files.has(asset.file)} toggle={toggle} play={play} mark={mark} publish={publishOne} reveal={localActions.reveal ? revealOne : undefined} share={localActions.airdrop ? shareOne : undefined} />)}</main>
-      : <section className="panel"><div className="empty">{assets.length ? <><strong>没有符合条件的视频</strong>试试切换状态、分类或目录，或清空搜索词</> : <><strong>媒体库是空的</strong>完成下载后视频会自动出现，也可以点击「导入目录」登记服务器上的文件</>}</div></section>}
+      : <section className="panel"><div className="empty">{assets.length ? <><strong>没有符合条件的视频</strong>试试切换状态、分类或目录，或清空搜索词</> : <><strong>媒体库是空的</strong>{localActions.upload ? '下载完成后视频会自动出现，也可以点击「上传视频」从本地添加文件' : '完成下载后视频会自动出现，也可以点击「导入目录」登记服务器上的文件'}</>}</div></section>}
     {playing ? <div className="modal-bg" role="dialog" aria-modal="true" aria-label="视频播放" onMouseDown={() => setPlaying(undefined)}><div className="modal player" onMouseDown={event => event.stopPropagation()}><button className="player-close" aria-label="关闭播放" title="关闭 (Esc)" onClick={() => setPlaying(undefined)}>×</button><h2>{playing.analysis?.title || playing.filename}</h2><video controls autoPlay src={api.library.mediaUrl(playing.id)} /><p className="filename">{playing.filename}</p></div></div> : null}
     {publishing ? <PublishDialog assets={publishing} close={() => setPublishing(undefined)} done={() => { setPublishing(undefined); openTasks('publisher') }} platformAuth={platformAuth} /> : null}
     {remaking ? <RemakeDialog assets={remaking} close={() => setRemaking(undefined)} done={() => { setRemaking(undefined); openTasks('remake') }} /> : null}

@@ -110,7 +110,6 @@ export class PublisherService {
     if (!jobs.length) throw new Error('没有可发布的视频')
     if (!['platform', 'local'].includes(dispatchMode)) throw new Error('发布方式无效')
     const selected = resolvePublishPlatforms(platforms)
-    if (dispatchMode === 'local' && selected.some(platform => !isDouyinPublishPlatform(platform))) throw new Error('本地定时仅用于抖音发布')
     if (dispatchMode === 'local' && jobs.length === 1) throw new Error('本地定时仅用于批量发布')
     if (idempotencyKey) { const existing = this.db.meta(`publish:${idempotencyKey}`); if (existing) return this.db.publishBatches().find(batch => batch.id === existing)! }
     const now = new Date(), id = randomUUID()
@@ -126,16 +125,16 @@ export class PublisherService {
       let publishAt: string | undefined, executeAt: string | undefined
       if (input.publishAt) {
         const date = new Date(input.publishAt); if (Number.isNaN(date.getTime())) throw new Error('发布时间无效')
-        if (douyin) {
-          const minimum = dispatchMode === 'local' ? 60_000 : 2 * 3600_000
-          if (date.getTime() < now.getTime() + minimum) throw new Error(dispatchMode === 'local' ? '本地定时至少提前 1 分钟' : '平台排期至少提前 2 小时')
-          if (dispatchMode === 'platform' && date.getTime() > now.getTime() + 7 * 24 * 3600_000) throw new Error('平台排期不能超过 7 天')
-          if (dispatchMode === 'local') executeAt = date.toISOString(); else publishAt = date.toISOString()
+        if (dispatchMode === 'local') {
+          if (date.getTime() < now.getTime() + 60_000) throw new Error('本地定时至少提前 1 分钟')
+          executeAt = date.toISOString()
         } else {
-          if (date.getTime() < now.getTime() + 60_000) throw new Error('定时发布时间至少提前 1 分钟')
+          const minimum = douyin ? 2 * 3600_000 : 60_000
+          if (date.getTime() < now.getTime() + minimum) throw new Error(douyin ? '平台排期至少提前 2 小时' : '定时发布时间至少提前 1 分钟')
+          if (douyin && date.getTime() > now.getTime() + 7 * 24 * 3600_000) throw new Error('平台排期不能超过 7 天')
           publishAt = date.toISOString()
         }
-      } else if (douyin && (dispatchMode === 'local' || (jobs.length > 1 && index > 0))) throw new Error('批量发布除首条立即发布外，其余任务必须指定排期时间')
+      } else if (dispatchMode === 'local' || (douyin && jobs.length > 1 && index > 0)) throw new Error(dispatchMode === 'local' ? '本地定时需要指定执行时间' : '批量发布除首条立即发布外，其余任务必须指定排期时间')
       const submitAt = dispatchMode === 'local' ? executeAt : submissionTimes[expandedIndex]
       return { id: `${id}-${String(expandedIndex + 1).padStart(3, '0')}`, batchId: id, assetId: asset.id, platform, title, topics, summary: input.summary === undefined ? asset.analysis?.summary || '' : input.summary.trim(), publishAt, executeAt, submitAt, aigc: input.aigc !== false, waitForCovers: douyin && input.waitForCovers === true, status: dispatchMode === 'local' ? 'waiting_local' : 'queued' }
     })

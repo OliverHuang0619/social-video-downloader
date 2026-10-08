@@ -126,7 +126,7 @@ export class DownloadQueue {
   retryFailed() { let count = 0; for (const job of this.jobs.values()) if (job.status === 'failed' && this.requeue(job.id)) count++; if (count) { this.emit(); this.pump() } return count }
   private requeue(id: string) {
     const job = this.jobs.get(id); if (!job || !['failed', 'cancelled'].includes(job.status)) return false
-    job.status = 'queued'; job.error = undefined; job.progress = 0; job.attempts = 0; job.speed = undefined; job.eta = undefined; job.detail = '等待重试，将复用本地已下载的部分'
+    job.status = 'queued'; job.error = undefined; job.completedAt = undefined; job.storagePath = undefined; job.libraryError = undefined; job.progress = 0; job.attempts = 0; job.speed = undefined; job.eta = undefined; job.detail = '等待重试，将复用本地已下载的部分'
     return true
   }
   shutdown() { for (const child of this.active.values()) child.kill('SIGTERM') }
@@ -206,6 +206,9 @@ export class DownloadQueue {
           job.status = alreadyDownloaded ? 'skipped' : 'completed'; job.progress = 100
           job.detail = alreadyDownloaded ? (needsConversion ? '已复用本地文件并完成转码' : '文件已存在，未重复下载') : '下载完成'
           job.outputPath = downloadedPath || undefined
+          job.completedAt = new Date().toISOString()
+          job.storagePath = job.outputPath
+          job.libraryError = undefined
         } catch (conversionError) {
           this.transcoding.delete(job.id)
           if (String(job.status) !== 'cancelled') { job.status = 'failed'; job.detail = undefined; job.error = conversionError instanceof Error ? conversionError.message : String(conversionError) }

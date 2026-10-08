@@ -36,7 +36,13 @@ const publish = (event: ServerEvent) => { const data = `data: ${JSON.stringify(e
 const changed = (type: 'library' | 'analysis' | 'remake' | 'publisher' | 'codex' | 'subscriptions') => publish({ type, at: new Date().toISOString() })
 const config = new ConfigStore(), tools = new ToolManager(), media = new MediaService(tools), queue = new DownloadQueue(tools)
 const db = new AppDatabase(), auth = new AuthService(db), library = new LibraryService(db), codex = new CodexService(() => changed('codex'))
-const reportDownloads = (jobs: ReturnType<DownloadQueue['snapshot']>) => { void library.syncDownloads(jobs).then(() => changed('library')); publish({ type: 'downloads', jobs }) }
+const reportDownloads = (jobs: ReturnType<DownloadQueue['snapshot']>) => {
+  void library.syncDownloads(jobs).then(() => {
+    changed('library')
+    publish({ type: 'downloads', jobs: queue.snapshot() })
+  }).catch(error => console.error('下载媒体库同步失败:', error))
+  publish({ type: 'downloads', jobs })
+}
 queue.setReporter(reportDownloads); queue.hydrate(db.downloads(), process.env.SVD_CLOUDFLARE_RUNTIME === '1')
 const analysis = new AnalysisService(db, codex, () => changed('analysis'), id => library.resolvedFile(id)), publisher = new PublisherService(db, () => changed('publisher'), id => library.resolvedFile(id))
 const hypitConfig = new HypitConfigStore()
@@ -62,7 +68,7 @@ async function libraryFiles(ids: unknown) {
   return Promise.all(unique.map(id => library.resolvedFile(id)))
 }
 async function downloadFile(id: string, request: IncomingMessage, response: ServerResponse) { const job = queue.get(id); if (!job || !['completed', 'skipped'].includes(job.status)) return json(response, 404, { error: '下载文件不存在' }); if (process.env.SVD_CLOUDFLARE_RUNTIME === '1' && job.assetId) return mediaResponse(job.assetId, request, response, true); if (!job.outputPath) return json(response, 404, { error: '下载文件不存在' }); const [root, file] = await Promise.all([realpath(config.get().outputRoot), realpath(job.outputPath)]); const relative = path.relative(root, file); if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return json(response, 403, { error: '不允许访问该文件' }); const info = await stat(file), encodedName = encodeURIComponent(path.basename(file)); response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': info.size, 'content-disposition': `attachment; filename*=UTF-8''${encodedName}`, 'cache-control': 'private, no-store' }); createReadStream(file).pipe(response) }
-async function mediaResponse(id: string, request: IncomingMessage, response: ServerResponse, attachment: boolean) { const url = await library.downloadUrl(id); if (url) { response.writeHead(302, { location: url, 'cache-control': 'private, no-store' }); response.end(); return }; return library.stream(id, request.headers.range, response, attachment) }
+async function mediaResponse(id: string, request: IncomingMessage, response: ServerResponse, attachment: boolean) { if (!attachment) { const url = await library.downloadUrl(id); if (url) { response.writeHead(302, { location: url, 'cache-control': 'private, no-store' }); response.end(); return } }; return library.stream(id, request.headers.range, response, attachment) }
 
 async function api(request: IncomingMessage, response: ServerResponse, url: URL) {
   const pathname = url.pathname
@@ -98,6 +104,15 @@ async function api(request: IncomingMessage, response: ServerResponse, url: URL)
   if (request.method === 'GET' && pathname === '/api/destination') return json(response, 200, config.get().outputRoot)
   const oldFile = request.method === 'GET' && pathname.match(/^\/api\/downloads\/([0-9a-f-]+)\/file$/); if (oldFile) return downloadFile(oldFile[1], request, response)
   if (request.method === 'GET' && pathname === '/api/downloads/jobs') return json(response, 200, queue.snapshot())
+  if (request.method === 'POST' && pathname === '/api/downloads/register') {
+    const value = await body<{ id?: string }>(request)
+    const job = queue.get(String(value.id || ''))
+    if (!job) throw Object.assign(new Error('下载任务不存在'), { statusCode: 404 })
+    const asset = await library.registerCompletedDownload(job)
+    publish({ type: 'downloads', jobs: queue.snapshot() })
+    changed('library')
+    return json(response, 200, asset)
+  }
   if (request.method === 'POST' && pathname === '/api/downloads/start') {
     const value = await body<StartRequest>(request); value.options.outputRoot = config.get().outputRoot
     await config.patch({ cookieSource: value.options.cookieSource, options: { mode: value.options.mode, quality: value.options.quality, container: value.options.container, audioFormat: value.options.audioFormat, audioBitrate: value.options.audioBitrate, quickTimeCompatible: value.options.quickTimeCompatible, quickTimeQuality: value.options.quickTimeQuality } })
@@ -223,6 +238,12 @@ async function api(request: IncomingMessage, response: ServerResponse, url: URL)
 }
 
 await config.load(); await mkdir(config.get().outputRoot, { recursive: true }); await auth.initialize(); await codex.initialize(); await hypitConfig.load(); await migrateLegacy(db, library)
+// Reconcile completed downloads after a container restart. A previous R2
+// upload or D1 write may have failed after yt-dlp marked the job complete, and
+// no later queue event is guaranteed to arrive to retry the library insert.
+if (process.env.SVD_CLOUDFLARE_RUNTIME === '1') {
+  await library.syncDownloads(queue.snapshot())
+}
 if (process.env.SVD_CLOUDFLARE_RUNTIME === '1') wakeBackgroundTasks()
 const server = createServer(async (request, response) => {
   try { const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`); if (url.pathname.startsWith('/remote-browser/')) { auth.require(request); request.url = `${url.pathname.slice('/remote-browser'.length) || '/'}${url.search}`; return browserProxy.web(request, response) } if (url.pathname.startsWith('/api/')) await api(request, response, url); else await staticFile(url.pathname === '/' ? '/index.html' : url.pathname, response) }

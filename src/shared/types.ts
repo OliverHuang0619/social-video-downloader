@@ -65,6 +65,12 @@ export interface DownloadJob {
   detail?: string
   error?: string
   outputPath?: string
+  /** Time the media file finished downloading (ISO timestamp). */
+  completedAt?: string
+  /** Durable library path (R2 key on Cloudflare, filesystem path otherwise). */
+  storagePath?: string
+  /** Last error while registering the completed download in the media library. */
+  libraryError?: string
   attempts: number
   assetId?: string
 }

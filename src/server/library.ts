@@ -180,11 +180,26 @@ export class LibraryService {
       if (job.assetId) continue
       if (!job.outputPath || !['completed', 'skipped'].includes(job.status)) continue
       try {
-        const asset = await this.registerFile(job.outputPath, { sourceUrl: job.item.sourceUrl, platform: job.item.platform, uploader: job.item.uploader, duration: job.item.duration, thumbnail: job.item.thumbnail, publishedAt: job.item.publishedAt })
-        job.assetId = asset.id
+        await this.registerCompletedDownload(job)
+      } catch (error) {
+        job.libraryError = error instanceof Error ? error.message : String(error)
         this.db.saveDownload(job)
-      } catch { /* a partially written path will be retried on the next queue event */ }
+        console.error(`媒体库登记下载文件失败 (${job.outputPath}):`, error)
+      }
     }
+  }
+  async registerCompletedDownload(job: DownloadJob) {
+    if (!['completed', 'skipped'].includes(job.status) || !job.outputPath) throw new Error('下载文件尚未完成或路径不可用')
+    if (job.assetId) {
+      const existing = this.db.asset(job.assetId)
+      if (existing) return existing
+    }
+    const asset = await this.registerFile(job.outputPath, { sourceUrl: job.item.sourceUrl, platform: job.item.platform, uploader: job.item.uploader, duration: job.item.duration, thumbnail: job.item.thumbnail, publishedAt: job.item.publishedAt })
+    job.assetId = asset.id
+    job.storagePath = asset.file
+    job.libraryError = undefined
+    this.db.saveDownload(job)
+    return asset
   }
   private async withThumbnailSlot<T>(work: () => Promise<T>) {
     if (this.thumbnailActive >= 2) await new Promise<void>(resolve => this.thumbnailWaiters.push(resolve))
