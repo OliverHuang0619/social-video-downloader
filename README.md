@@ -49,7 +49,7 @@ npm run cloudflare:resources
 ./cloudflare/set-secrets.sh
 ```
 
-脚本会在 `cloudflare/.secrets.json` 生成权限为 `0600`、且已加入 Git 忽略的临时文件。首次运行 `npm run cloudflare:deploy` 时，Wrangler 会随 Worker 首次部署一起上传 Secrets；成功后临时文件会自动删除。后续部署会核对 Worker 已有的 Secret 名称并保留云端值。部署脚本先检查 Wrangler 登录、D1 ID、Docker 和必需 Secrets，再构建容器、应用 D1 迁移、配置 R2 CORS 并发布，避免在前置配置缺失时先动远程数据库。Cloudflare 以全新安装启动，不会导入 Docker/本地数据。Cloudflare 容器磁盘仅作临时工作空间；业务表和任务状态使用 D1，视频写入 R2，浏览器上传、播放和下载使用 R2 签名 URL，Chromium 登录资料与 `/config` 中非 SQLite 文件会加密后备份至 R2。D1 迁移按版本向前应用；不要在生产环境手动删除或回滚迁移记录，应新增修复迁移。完成容器重启、队列重试与空账号首次部署的 Cloudflare 端到端验证前，此配置仍标记为实验性。Docker 服务器与本地部署仍使用上面的既有命令。
+脚本会在 `cloudflare/.secrets.json` 生成权限为 `0600`、且已加入 Git 忽略的临时文件。首次运行 `npm run cloudflare:deploy` 时，Wrangler 会随 Worker 首次部署一起上传 Secrets；成功后临时文件会自动删除。后续部署会核对 Worker 已有的 Secret 名称并保留云端值。完整部署脚本先检查 Wrangler 登录、D1 ID、Docker 和必需 Secrets，再构建容器、应用 D1 迁移、配置 R2 CORS 并发布。日常发布前端和容器更新时可运行 `npm run cloudflare:publish`；它会重新构建项目并发布，不重复应用 D1 迁移或修改 CORS。Cloudflare 以全新安装启动，不会导入 Docker/本地数据。Cloudflare 容器磁盘仅作临时工作空间；业务表和任务状态使用 D1，视频写入 R2，浏览器上传、播放和下载使用 R2 签名 URL，Chromium 登录资料与 `/config` 中非 SQLite 文件会加密后备份至 R2。D1 迁移按版本向前应用；不要在生产环境手动删除或回滚迁移记录，应新增修复迁移。完成容器重启、队列重试与空账号首次部署的 Cloudflare 端到端验证前，此配置仍标记为实验性。Docker 服务器与本地部署仍使用上面的既有命令。
 
 ### 本地电脑浏览器模式
 

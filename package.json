@@ -1,6 +1,6 @@
 {
   "name": "social-video-workbench",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "description": "可通过 Docker 部署的视频下载、分析与抖音发布工作台",
   "type": "module",
@@ -16,6 +16,7 @@
     "cloudflare:resources": "node cloudflare/create-resources.mjs",
     "cloudflare:dev": "wrangler d1 migrations apply svw-workbench --local --config cloudflare/wrangler.jsonc && npm run build && wrangler dev --config cloudflare/wrangler.jsonc",
     "cloudflare:ssh": "sh cloudflare/ssh.sh",
+    "cloudflare:publish": "sh cloudflare/publish.sh",
     "cloudflare:deploy": "sh cloudflare/deploy.sh"
   },
   "dependencies": {
