@@ -134,7 +134,7 @@ export class PublisherService {
           if (douyin && date.getTime() > now.getTime() + 7 * 24 * 3600_000) throw new Error('平台排期不能超过 7 天')
           publishAt = date.toISOString()
         }
-      } else if (dispatchMode === 'local' || (douyin && jobs.length > 1 && index > 0)) throw new Error(dispatchMode === 'local' ? '本地定时需要指定执行时间' : '批量发布除首条立即发布外，其余任务必须指定排期时间')
+      } else if ((dispatchMode === 'local' || douyin) && jobs.length > 1 && index > 0) throw new Error(dispatchMode === 'local' ? '批量本地排期除首条立即执行外，其余任务必须指定执行时间' : '批量发布除首条立即发布外，其余任务必须指定排期时间')
       const submitAt = dispatchMode === 'local' ? executeAt : submissionTimes[expandedIndex]
       return { id: `${id}-${String(expandedIndex + 1).padStart(3, '0')}`, batchId: id, assetId: asset.id, platform, title, topics, summary: input.summary === undefined ? asset.analysis?.summary || '' : input.summary.trim(), publishAt, executeAt, submitAt, aigc: input.aigc !== false, waitForCovers: douyin && input.waitForCovers === true, status: dispatchMode === 'local' ? 'waiting_local' : 'queued' }
     })

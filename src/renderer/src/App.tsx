@@ -350,11 +350,6 @@ const managedPublishPlatforms = [
 ]
 
 function PublishDialog({ assets, close, done, platformAuth }: { assets: MediaAsset[]; close: () => void; done: () => void; platformAuth: BrowserStatus['platformAuth'] }) {
-  const defaultPublishStart = () => {
-    const step = 30 * 60_000
-    const date = new Date(Math.ceil((Date.now() + 125 * 60_000) / step) * step)
-    return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
-  }
   const single = assets.length === 1
   const choices = managedPublishPlatforms.filter(platform => platformAuth[platform.id]?.status === 'authorized')
   const [platforms, setPlatforms] = useState<string[]>(() => ["VIDEO_BILIBILI", "VIDEO_WEIXINCHANNEL"].filter(id => platformAuth[id]?.status === 'authorized'))
@@ -362,7 +357,7 @@ function PublishDialog({ assets, close, done, platformAuth }: { assets: MediaAss
   const titleLimit = douyinSelected ? 30 : 100
   const [dispatchMode, setDispatch] = useState<'platform' | 'local'>('platform')
   const [scheduled, setScheduled] = useState(!single)
-  const [start, setStart] = useState(defaultPublishStart)
+  const [start, setStart] = useState('')
   const [interval, setIntervalValue] = useState(1)
   const [useChineseTitle, setUseChineseTitle] = useState(true)
   const [details, setDetails] = useState<Record<string, { title: string; topics: string; summary: string }>>(() => Object.fromEntries(assets.map(asset => {
@@ -391,9 +386,15 @@ function PublishDialog({ assets, close, done, platformAuth }: { assets: MediaAss
     if (!platforms.length) return setMessage('请至少选择一个平台')
     const startDate = start ? new Date(start) : undefined
     const mode = single ? 'platform' : dispatchMode
-    const automatic = !single && douyinSelected && mode === 'platform' && !start
-    const automaticTimes = automatic ? automaticPlatformPublishTimes(assets.length, interval) : []
-    if (scheduled && (startDate && Number.isNaN(startDate.getTime()) || single && !startDate || mode === 'local' && !startDate)) return setMessage('请选择有效的首条发布时间')
+    const automatic = !single && mode === 'platform' && !startDate
+    const automaticTimes = automatic
+      ? douyinSelected
+        ? automaticPlatformPublishTimes(assets.length, interval)
+        : assets.map((_, index) => index === 0 ? undefined : new Date(Date.now() + index * interval * 3600_000).toISOString())
+      : !single && mode === 'local' && !startDate
+        ? assets.map((_, index) => index === 0 ? undefined : new Date(Date.now() + index * interval * 3600_000).toISOString())
+        : []
+    if (scheduled && (startDate && Number.isNaN(startDate.getTime()) || single && !startDate)) return setMessage('请选择有效的首条发布时间')
     const limit = douyinSelected ? 30 : 100
     const jobs = assets.map((asset, index) => {
       const detail = details[asset.id] || { title: '', topics: '', summary: '' }
@@ -404,7 +405,7 @@ function PublishDialog({ assets, close, done, platformAuth }: { assets: MediaAss
     })
     const names = platforms.map(publishPlatformLabel).join('、')
     const count = jobs.length * platforms.length
-    const action = mode === 'local' ? '创建本地定时发布队列' : automatic ? '立即发布首条并自动安排后续抖音排期' : scheduled && startDate ? `提交到${names}` : `立即公开发布到${names}`
+    const action = mode === 'local' ? automatic ? '立即提交首条并安排后续本地执行' : '创建本地定时发布队列' : automatic ? '立即发布首条并安排后续平台排期' : scheduled && startDate ? `提交到${names}` : `立即公开发布到${names}`
     if (!window.confirm(`即将${action}，共 ${count} 个发布任务；同一视频跨平台连续提交，同平台不同视频间随机等待 1–3 分钟，是否继续？`)) return
     try { await api.publisher.publish({ jobs, dispatchMode: mode, platforms, idempotencyKey: crypto.randomUUID() }); toast(`已创建 ${count} 个发布任务`); done() } catch (error) { setMessage(errorText(error)) }
   }
@@ -439,9 +440,9 @@ function PublishDialog({ assets, close, done, platformAuth }: { assets: MediaAss
       })}</div>}
       {single ? <>
         <div className="field"><span id="publish-timing">发布时间</span><div className="segmented" role="tablist" aria-labelledby="publish-timing"><button type="button" role="tab" aria-selected={!scheduled} className={scheduled ? '' : 'active'} onClick={() => setScheduled(false)}>立即发布</button><button type="button" role="tab" aria-selected={scheduled} className={scheduled ? 'active' : ''} onClick={() => setScheduled(true)}>定时发布</button></div></div>
-      </> : <label>批量执行方式<select value={dispatchMode} onChange={event => { const mode = event.target.value as 'platform' | 'local'; setDispatch(mode); setStart(current => mode === 'local' ? '' : current || defaultPublishStart()) }}><option value="platform">一次性提交到平台排期</option><option value="local">使用本地排期，到点后逐条提交</option></select></label>}
+      </> : <label>批量执行方式<select value={dispatchMode} onChange={event => { setDispatch(event.target.value as 'platform' | 'local'); setStart('') }}><option value="platform">一次性提交到平台排期</option><option value="local">使用本地排期，到点后逐条提交</option></select></label>}
       {scheduled ? <>
-        <label>{!single && dispatchMode === 'local' ? '首条本地执行时间' : !single && douyinSelected && dispatchMode === 'platform' ? '首条发布时间（留空则首条立即发布，后续自动排期）' : !single ? '首条发布时间（留空则立即发布）' : '首条发布时间'}<input type="datetime-local" value={start} onChange={event => setStart(event.target.value)} /></label>
+        <label>{!single && dispatchMode === 'local' ? '首条本地执行时间（留空则立即执行首条）' : !single ? '首条发布时间（留空则立即发布首条，后续自动排期）' : '首条发布时间'}<input type="datetime-local" value={start} onChange={event => setStart(event.target.value)} /></label>
         {!single && (douyinSelected || start) ? <label>相邻作品的发布间隔（小时）<input type="number" min="1" value={interval} onChange={event => setIntervalValue(Math.max(1, Number(event.target.value)))} /></label> : null}
       </> : null}
       {douyinSelected ? <fieldset>
@@ -704,8 +705,8 @@ function PublishBatchCard({ batch, assets, reload }: { batch: PublishBatch; asse
         </div>
       </div>
       <span className={`pill ${job.status}`}>{taskNames[job.status] || job.status}</span>
-      <time>{job.submitAt ? new Date(job.submitAt).toLocaleString() : job.executeAt ? new Date(job.executeAt).toLocaleString() : '—'}</time>
-      <time>{job.publishAt ? new Date(job.publishAt).toLocaleString() : batch.dispatchMode === 'local' ? '提交后立即发布' : '立即发布'}</time>
+      <time>{job.submitAt ? new Date(job.submitAt).toLocaleString() : job.executeAt ? new Date(job.executeAt).toLocaleString() : batch.dispatchMode === 'local' ? '立即执行' : '—'}</time>
+      <time>{job.publishAt ? new Date(job.publishAt).toLocaleString() : batch.dispatchMode === 'local' ? job.executeAt ? '本地执行时提交' : '立即提交' : '立即发布'}</time>
       <span className="actions">{job.screenshot ? <a target="_blank" rel="noreferrer" href={`/api/publisher/artifacts/${encodeURIComponent(job.screenshot.split('/').pop()!)}`}>诊断截图</a> : null}{['failed', 'needs_login', 'needs_attention', 'interrupted', 'cancelled'].includes(job.status) ? <button onClick={() => void api.publisher.retry(job.id).then(reload)}>重试</button> : null}</span>
       {job.error ? <p className="error">{job.error}</p> : null}
     </div>)}
