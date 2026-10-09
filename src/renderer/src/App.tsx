@@ -327,7 +327,7 @@ function DownloadPage({ jobs, setJobs }: { jobs: DownloadJob[]; setJobs: (jobs: 
         <div className="row between"><span className="task-title" title={job.item.title}>{job.item.title}</span><span className="row">{['failed', 'cancelled'].includes(job.status) ? <button className="ghost small" onClick={() => void retry(job.id)}>重试</button> : null}<span className={`pill ${job.status}`}>{taskNames[job.status] || job.status}</span></span></div>
         <div className={`progress ${['completed', 'skipped'].includes(job.status) ? 'done' : job.status === 'failed' ? 'bad' : ''}`}><i style={{ width: `${job.progress}%` }} /></div>
         {job.status === 'failed' ? <p className="error task-error">{job.error || '下载失败'}</p> : <div className="task-meta"><span className="data">{job.progress.toFixed(1)}%</span><span>·</span><span>{job.detail || '等待中'}</span>{job.speed ? <span className="data">· {job.speed}</span> : null}{job.eta ? <span className="data">· 剩余 {job.eta}</span> : null}</div>}
-        {['completed', 'skipped'].includes(job.status) ? <div className="download-complete-details">
+        {(['completed', 'skipped'].includes(job.status) || Boolean(job.libraryError && job.outputPath)) ? <div className="download-complete-details">
           <div><span>完成时间</span><time>{job.completedAt ? new Date(job.completedAt).toLocaleString() : '旧任务未记录'}</time></div>
           <div className="download-storage"><span>存储位置</span><code title={job.storagePath || job.outputPath || '路径不可用'}>{job.storagePath || job.outputPath || '路径不可用'}</code></div>
           <div className="row download-complete-actions">

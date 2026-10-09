@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.1 - 2026-10-09
+
+### Fixes
+
+- Save completed Cloudflare downloads to R2 before marking them complete, and report actionable upload errors when persistence fails.
+
 ## 1.4.0 - 2026-10-08
 
 ### Features

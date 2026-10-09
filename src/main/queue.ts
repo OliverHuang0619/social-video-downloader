@@ -88,6 +88,7 @@ export function quickTimeArgs(input: string, output: string, quality: QuickTimeQ
 
 export class DownloadQueue {
   private jobs = new Map<string, DownloadJob>(); private active = new Map<string, ChildProcessWithoutNullStreams>(); private report: (jobs: DownloadJob[]) => void = () => undefined
+  private finalizeDownload?: (job: DownloadJob) => Promise<{ assetId: string; storagePath: string }>
   /** Jobs that finished downloading and are waiting for / running the single transcode lane. */
   private transcoding = new Set<string>(); private transcodeBusy = false; private transcodeWaiters: Array<() => void> = []
   constructor(private tools: ToolManager) {}
@@ -102,6 +103,7 @@ export class DownloadQueue {
   snapshot() { return [...this.jobs.values()] }
   get(id: string) { return this.jobs.get(id) }
   setReporter(report: (jobs: DownloadJob[]) => void) { this.report = report }
+  setCompletionHandler(handler: (job: DownloadJob) => Promise<{ assetId: string; storagePath: string }>) { this.finalizeDownload = handler }
   /** Loads persisted jobs (e.g. after a restart) so history stays visible and failed jobs remain retryable. */
   hydrate(jobs: DownloadJob[], resumeActive = false) {
     for (const job of [...jobs].reverse()) if (!this.jobs.has(job.id)) this.jobs.set(job.id, { ...job, status: ['queued', 'downloading'].includes(job.status) ? (resumeActive ? 'queued' : 'failed') : job.status, speed: undefined, eta: undefined })
@@ -203,15 +205,33 @@ export class DownloadQueue {
             try { if (String(job.status) === 'cancelled') throw new Error('转换已取消'); downloadedPath = await this.transcodeQuickTime(job, ffmpeg, downloadedPath) }
             finally { this.releaseTranscodeLane(); this.transcoding.delete(job.id) }
           }
-          job.status = alreadyDownloaded ? 'skipped' : 'completed'; job.progress = 100
-          job.detail = alreadyDownloaded ? (needsConversion ? '已复用本地文件并完成转码' : '文件已存在，未重复下载') : '下载完成'
           job.outputPath = downloadedPath || undefined
           job.completedAt = new Date().toISOString()
           job.storagePath = job.outputPath
           job.libraryError = undefined
+          if (!job.outputPath) throw new Error('下载进程未返回已保存文件的路径')
+          if (this.finalizeDownload) {
+            // Keep the job active while uploading the completed file to durable
+            // storage so Cloudflare does not idle the container mid-transfer.
+            job.progress = 99
+            job.detail = '下载完成，正在保存到媒体库…'
+            this.emit()
+            const saved = await this.finalizeDownload(job)
+            job.assetId = saved.assetId
+            job.storagePath = saved.storagePath
+          }
+          job.status = alreadyDownloaded ? 'skipped' : 'completed'; job.progress = 100
+          job.detail = alreadyDownloaded ? (needsConversion ? '已复用本地文件并完成转码' : '文件已存在，未重复下载') : '下载完成'
+          job.libraryError = undefined
+          job.error = undefined
         } catch (conversionError) {
           this.transcoding.delete(job.id)
-          if (String(job.status) !== 'cancelled') { job.status = 'failed'; job.detail = undefined; job.error = conversionError instanceof Error ? conversionError.message : String(conversionError) }
+          if (String(job.status) !== 'cancelled') {
+            job.status = 'failed'; job.detail = undefined
+            const message = conversionError instanceof Error ? conversionError.message : String(conversionError)
+            if (job.outputPath) { job.libraryError = message; job.error = `下载已完成，但保存到媒体库失败：${message}` }
+            else job.error = message
+          }
         }
       }
       else if (job.attempts < 3) { job.status = 'queued'; job.detail = `第 ${job.attempts} 次尝试失败，正在重试…`; job.error = undefined }

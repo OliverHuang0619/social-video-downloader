@@ -69,9 +69,38 @@ export class LibraryService {
   private async putObject(key: string, file: string) {
     const token = process.env.SVD_CF_BRIDGE_TOKEN
     if (!token) throw new Error('Cloudflare R2 连接密钥未配置')
-    const body = Readable.toWeb(createReadStream(file)) as ReadableStream
-    const response = await fetch(this.objectUrl(key), { method: 'PUT', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' }, body, duplex: 'half' } as RequestInit & { duplex: 'half' })
-    if (!response.ok) throw new Error(`保存媒体到 Cloudflare R2 失败 (${response.status})`)
+    // Node's fetch can fail with only `fetch failed` for container-internal
+    // outbound bindings. curl uses the same outbound path as the D1 adapter,
+    // and streams the file directly from disk instead of buffering it.
+    const quote = (value: string) => `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replace(/[\r\n]/g, '')}"`
+    const config = [
+      `url = ${quote(this.objectUrl(key))}`,
+      'request = "PUT"',
+      'silent',
+      'show-error',
+      'fail-with-body',
+      'connect-timeout = 20',
+      'max-time = 3600',
+      `header = ${quote(`authorization: Bearer ${token}`)}`,
+      'header = "content-type: application/octet-stream"',
+      `data-binary = ${quote(`@${file}`)}`,
+      '',
+    ].join('\n')
+    const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+      const child = spawn('curl', ['--config', '-'], { stdio: ['pipe', 'pipe', 'pipe'] })
+      let stdout = ''; let stderr = ''; let settled = false
+      const timer = setTimeout(() => child.kill('SIGKILL'), 60 * 60_000 + 5_000)
+      child.stdout.setEncoding('utf8').on('data', chunk => { if (stdout.length < 64_000) stdout += chunk })
+      child.stderr.setEncoding('utf8').on('data', chunk => { if (stderr.length < 16_000) stderr += chunk })
+      child.once('error', error => { if (!settled) { settled = true; clearTimeout(timer); reject(error) } })
+      child.once('close', code => { if (!settled) { settled = true; clearTimeout(timer); resolve({ code, stdout, stderr }) } })
+      child.stdin.once('error', error => { if ((error as NodeJS.ErrnoException).code !== 'EPIPE') child.kill('SIGKILL') })
+      child.stdin.end(config)
+    })
+    if (result.code !== 0) {
+      const detail = (result.stderr || result.stdout || `curl 退出码 ${result.code}`).trim()
+      throw new Error(`保存媒体到 Cloudflare R2 失败：${detail}`)
+    }
   }
   private async getObject(key: string, range?: string) {
     const token = process.env.SVD_CF_BRIDGE_TOKEN
@@ -189,12 +218,19 @@ export class LibraryService {
     }
   }
   async registerCompletedDownload(job: DownloadJob) {
-    if (!['completed', 'skipped'].includes(job.status) || !job.outputPath) throw new Error('下载文件尚未完成或路径不可用')
-    if (job.assetId) {
-      const existing = this.db.asset(job.assetId)
-      if (existing) return existing
+    const recoverableFailure = job.status === 'failed' && Boolean(job.libraryError)
+    if ((!['completed', 'skipped', 'downloading'].includes(job.status) && !recoverableFailure) || !job.outputPath) throw new Error('下载文件尚未完成或路径不可用')
+    const assetId = job.assetId || job.id
+    const existing = this.db.asset(assetId)
+    let asset = existing
+    if (!asset) {
+      try {
+        asset = await this.registerFile(job.outputPath, { id: assetId, sourceUrl: job.item.sourceUrl, platform: job.item.platform, uploader: job.item.uploader, duration: job.item.duration, thumbnail: job.item.thumbnail, publishedAt: job.item.publishedAt })
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code === 'ENOENT' && this.cloudflare) throw new Error('Cloudflare 容器中的临时下载文件已不存在，请重新下载此视频')
+        throw error
+      }
     }
-    const asset = await this.registerFile(job.outputPath, { sourceUrl: job.item.sourceUrl, platform: job.item.platform, uploader: job.item.uploader, duration: job.item.duration, thumbnail: job.item.thumbnail, publishedAt: job.item.publishedAt })
     job.assetId = asset.id
     job.storagePath = asset.file
     job.libraryError = undefined

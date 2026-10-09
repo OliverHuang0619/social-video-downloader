@@ -36,6 +36,10 @@ const publish = (event: ServerEvent) => { const data = `data: ${JSON.stringify(e
 const changed = (type: 'library' | 'analysis' | 'remake' | 'publisher' | 'codex' | 'subscriptions') => publish({ type, at: new Date().toISOString() })
 const config = new ConfigStore(), tools = new ToolManager(), media = new MediaService(tools), queue = new DownloadQueue(tools)
 const db = new AppDatabase(), auth = new AuthService(db), library = new LibraryService(db), codex = new CodexService(() => changed('codex'))
+queue.setCompletionHandler(async job => {
+  const asset = await library.registerCompletedDownload(job)
+  return { assetId: asset.id, storagePath: asset.file }
+})
 const reportDownloads = (jobs: ReturnType<DownloadQueue['snapshot']>) => {
   void library.syncDownloads(jobs).then(() => {
     changed('library')
@@ -67,7 +71,19 @@ async function libraryFiles(ids: unknown) {
   const unique = [...new Set((Array.isArray(ids) ? ids : []).map(value => String(value)))].filter(Boolean)
   return Promise.all(unique.map(id => library.resolvedFile(id)))
 }
-async function downloadFile(id: string, request: IncomingMessage, response: ServerResponse) { const job = queue.get(id); if (!job || !['completed', 'skipped'].includes(job.status)) return json(response, 404, { error: '下载文件不存在' }); if (process.env.SVD_CLOUDFLARE_RUNTIME === '1' && job.assetId) return mediaResponse(job.assetId, request, response, true); if (!job.outputPath) return json(response, 404, { error: '下载文件不存在' }); const [root, file] = await Promise.all([realpath(config.get().outputRoot), realpath(job.outputPath)]); const relative = path.relative(root, file); if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return json(response, 403, { error: '不允许访问该文件' }); const info = await stat(file), encodedName = encodeURIComponent(path.basename(file)); response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': info.size, 'content-disposition': `attachment; filename*=UTF-8''${encodedName}`, 'cache-control': 'private, no-store' }); createReadStream(file).pipe(response) }
+async function downloadFile(id: string, request: IncomingMessage, response: ServerResponse) {
+  const job = queue.get(id)
+  const recoverableFailure = job?.status === 'failed' && Boolean(job.libraryError)
+  if (!job || (!['completed', 'skipped'].includes(job.status) && !recoverableFailure)) return json(response, 404, { error: '下载文件不存在' })
+  if (process.env.SVD_CLOUDFLARE_RUNTIME === '1' && job.assetId) return mediaResponse(job.assetId, request, response, true)
+  if (!job.outputPath) return json(response, 404, { error: '下载文件不存在' })
+  const [root, file] = await Promise.all([realpath(config.get().outputRoot), realpath(job.outputPath)])
+  const relative = path.relative(root, file)
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return json(response, 403, { error: '不允许访问该文件' })
+  const info = await stat(file), encodedName = encodeURIComponent(path.basename(file))
+  response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': info.size, 'content-disposition': `attachment; filename*=UTF-8''${encodedName}`, 'cache-control': 'private, no-store' })
+  createReadStream(file).pipe(response)
+}
 async function mediaResponse(id: string, request: IncomingMessage, response: ServerResponse, attachment: boolean) { if (!attachment) { const url = await library.downloadUrl(id); if (url) { response.writeHead(302, { location: url, 'cache-control': 'private, no-store' }); response.end(); return } }; return library.stream(id, request.headers.range, response, attachment) }
 
 async function api(request: IncomingMessage, response: ServerResponse, url: URL) {
